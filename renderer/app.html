@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' https: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-src 'none'; form-action 'none'" />
+    <title>小宇宙桌面版</title>
+    <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="listening.css" />
+  </head>
+  <body class="listening-layout">
+    <div class="app-shell">
+      <header class="app-toolbar">
+        <button id="brand-home" class="app-brand" type="button" aria-label="小宇宙 收听首页"><svg aria-hidden="true"><use href="symbols.svg#orbit"/></svg><span>小宇宙</span></button>
+        <nav class="primary-navigation" aria-label="主导航">
+          <button class="nav-item is-active" data-route="listen" aria-current="page">收听</button>
+          <button class="nav-item" data-route="discover">发现</button>
+          <button class="nav-item" data-route="subscriptions">我的订阅</button>
+        </nav>
+        <div class="toolbar-tools">
+          <button class="nav-item toolbar-icon" data-route="search" type="button" aria-label="搜索" title="搜索"><svg aria-hidden="true"><use href="symbols.svg#search"/></svg></button>
+          <button id="desktop-options-button" class="toolbar-icon" type="button" aria-label="通知与桌面设置" title="通知与桌面设置"><svg aria-hidden="true"><use href="symbols.svg#bell"/></svg></button>
+          <button id="account-button" class="toolbar-account" type="button"><svg class="account-icon" aria-hidden="true"><use href="symbols.svg#account"/></svg><span id="account-label">登录</span><svg class="account-chevron" aria-hidden="true"><use href="symbols.svg#chevron"/></svg></button>
+        </div>
+      </header>
+
+      <main class="main-column">
+        <header class="topbar">
+          <button id="back-button" class="round-button" aria-label="返回" title="返回" hidden><svg aria-hidden="true"><use href="symbols.svg#back"/></svg></button>
+          <div class="topbar-context"><span id="route-eyebrow" hidden></span><strong id="route-title"></strong></div>
+        </header>
+        <section id="listening-page" class="listening-page" aria-label="收听">
+          <section class="listen-column">
+            <h1>继续收听</h1>
+            <div id="home-player-slot"></div>
+          </section>
+          <section class="history-column" aria-labelledby="history-heading">
+            <h2 id="history-heading">播放历史</h2>
+            <div class="history-filters" role="group" aria-label="筛选播放历史">
+              <button type="button" data-history-filter="all" aria-pressed="true">全部</button>
+              <button type="button" data-history-filter="unfinished" aria-pressed="false">未听完</button>
+            </div>
+            <div id="history-list"></div>
+          </section>
+        </section>
+        <section id="page-content" class="page-content" aria-live="polite"></section>
+      </main>
+      <div id="mini-player-slot">
+      <footer class="player-bar" aria-label="播放器">
+        <div class="now-playing">
+          <div id="player-cover" class="player-cover"><svg aria-hidden="true"><use href="symbols.svg#orbit"/></svg></div>
+          <div class="player-copy"><strong id="player-title">还没有开始播放</strong><span id="player-subtitle">从发现页挑一集播客</span><span id="transcription-status" class="transcription-status" hidden></span></div>
+        </div>
+        <div class="player-controls">
+          <button id="skip-back" aria-label="后退 15 秒" title="后退 15 秒"><svg aria-hidden="true"><use href="symbols.svg#skip-back"/></svg></button>
+          <button id="play-button" class="play-button" aria-label="播放" title="播放"><svg aria-hidden="true"><use href="symbols.svg#play"/></svg></button>
+          <button id="skip-forward" aria-label="前进 30 秒" title="前进 30 秒"><svg aria-hidden="true"><use href="symbols.svg#skip-forward"/></svg></button>
+        </div>
+        <div class="player-progress">
+          <span id="current-time">0:00</span>
+          <div class="player-progress-track">
+            <canvas id="progress-waveform" aria-hidden="true"></canvas>
+            <input id="progress" type="range" min="0" max="100" step="0.01" value="0" disabled aria-label="播放进度" />
+            <div id="progress-anchors" class="progress-anchors" aria-label="节目时间戳锚点"></div>
+            <div id="player-timestamp-tooltip" class="player-timestamp-tooltip" role="tooltip"></div>
+          </div>
+          <span id="duration">0:00</span>
+        </div>
+        <div class="player-extra">
+          <button id="view-podcast-button" class="player-link-button" title="查看当前节目" disabled>查看节目</button>
+          <button id="summarize-button" class="player-link-button is-accent" title="导出文字稿并总结当前单集" disabled>AI 总结</button>
+          <details id="player-more-menu" class="action-menu action-menu-player">
+            <summary class="more-button" title="更多操作" aria-label="更多操作"><svg aria-hidden="true"><use href="symbols.svg#more"/></svg></summary>
+            <div class="action-menu-panel" role="menu">
+              <button id="episode-notes-button" role="menuitem" disabled>单集详情</button>
+              <button id="home-view-podcast" role="menuitem" disabled>查看节目</button>
+              <button id="home-summarize" role="menuitem" disabled>AI 总结</button>
+              <button id="download-audio-button" role="menuitem" disabled>下载音频</button>
+              <button id="transcribe-audio-button" role="menuitem" disabled>导出文字稿</button>
+              <button id="copy-episode-link-button" role="menuitem" disabled>复制单集链接</button>
+              <button id="copy-podcast-link-button" role="menuitem" disabled>复制节目链接</button>
+              <button id="speed-button" role="menuitem">播放速度 · 1×</button>
+            </div>
+          </details>
+        </div>
+      </footer>
+      </div>
+    </div>
+    <audio id="audio" preload="metadata"></audio>
+
+    <div id="toast" class="toast" role="status"></div>
+    <dialog id="login-dialog" class="dialog">
+      <form id="login-form" method="dialog">
+        <button type="button" class="dialog-close" data-close-dialog>×</button>
+        <div class="dialog-kicker">YOUR LISTENING ACCOUNT</div>
+        <h2>登录小宇宙</h2>
+        <p class="dialog-lead">使用小宇宙官方账号登录，下次打开会自动恢复。播放历史和进度保存在这台电脑上。</p>
+        <div class="official-login-actions">
+          <button id="open-official-login-button" type="button" class="primary-button">前往官方登录</button>
+          <button id="sync-official-login-button" type="button" class="secondary-button">重新检测登录状态</button>
+        </div>
+        <p id="code-status" class="code-status" role="status" aria-live="polite">在官方窗口完成登录后将自动返回。</p>
+        <p id="login-error" class="form-error"></p>
+      </form>
+    </dialog>
+    <dialog id="summary-consent-dialog" class="dialog">
+      <form method="dialog">
+        <button type="button" class="dialog-close" data-close-dialog>×</button>
+        <div class="dialog-kicker">AI SUMMARY PRIVACY</div>
+        <h2>导出文字稿并总结前确认</h2>
+        <p class="dialog-lead">若当前单集没有文字稿，会先使用 <strong id="summary-consent-asr">当前文字稿来源</strong> 导出；随后，完整文字稿或分段内容将发送给 <strong id="summary-consent-provider">当前 AI Provider</strong>。<span id="summary-consent-comments"></span> 选择 API ASR 时可能产生费用，API Key 仅从系统安全凭据存储读取。</p>
+        <div class="consent-actions">
+          <button type="button" class="secondary-button" data-close-dialog>取消</button>
+          <button id="summary-consent-confirm" type="button" class="primary-button">同意并继续</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="resummarize-dialog" class="dialog">
+      <form method="dialog">
+        <button type="button" class="dialog-close" data-close-dialog>×</button>
+        <h2>重新生成总结？</h2>
+        <p id="resummarize-detail" class="dialog-lead"></p>
+        <p class="dialog-lead">现有总结文件不会被覆盖，新结果会保存为另一份 Markdown。</p>
+        <div class="consent-actions">
+          <button type="button" class="secondary-button" data-close-dialog>取消</button>
+          <button id="resummarize-confirm" type="button" class="primary-button">重新总结</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="summary-model-dialog" class="dialog model-editor-dialog">
+      <form id="summary-model-form" method="dialog">
+        <button type="button" class="dialog-close" data-close-dialog>×</button>
+        <h2 id="summary-model-dialog-title">模型详情</h2>
+        <input id="summary-model-id" type="hidden" />
+        <label>自定义名称<input id="summary-model-name" type="text" maxlength="80" placeholder="例如：日常总结" required /></label>
+        <label>接口类型
+          <select id="summary-model-provider">
+            <option value="qwen">通义千问</option>
+            <option value="doubao">豆包</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="kimi">Kimi</option>
+            <option value="glm">智谱 GLM</option>
+            <option value="openrouter">OpenRouter</option>
+          </select>
+        </label>
+        <label>Base URL<input id="summary-model-endpoint" type="url" placeholder="https://api.example.com/v1/chat/completions" required /></label>
+        <label>Model ID<input id="summary-model-model" type="text" maxlength="160" placeholder="模型标识" required /></label>
+        <label>API Key
+          <div class="credential-row">
+            <input id="summary-model-api-key" type="password" placeholder="已保存则留空；输入新值会覆盖" autocomplete="new-password" />
+            <button id="clear-summary-model-key" class="mini-button is-danger" type="button">清除</button>
+          </div>
+        </label>
+        <label class="checkbox-row"><input id="summary-model-enabled" type="checkbox" checked /><span>启用该模型</span></label>
+        <p id="summary-model-status" class="code-status" role="status" aria-live="polite"></p>
+        <div class="model-editor-actions">
+          <button id="test-summary-model" type="button" class="secondary-button">测试连接</button>
+          <button id="save-summary-model" type="submit" class="primary-button">完成</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="logout-dialog" class="dialog logout-dialog">
+      <form method="dialog">
+        <button type="button" class="dialog-close" data-close-dialog>×</button>
+        <h2>确认退出登录？</h2>
+        <p class="dialog-lead">退出后会停止播放和订阅提醒。收听记录仍保存在这台电脑上，重新登录同一账号即可续播。</p>
+        <div class="logout-warning">再次使用账号功能时，需要重新完成官方登录授权。</div>
+        <div class="consent-actions">
+          <button type="button" class="secondary-button" data-close-dialog>取消</button>
+          <button id="logout-confirm" type="button" class="danger-button">确认退出登录</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="desktop-options-dialog" class="dialog desktop-dialog">
+      <button class="dialog-close" type="button" data-close-dialog aria-label="关闭桌面设置">×</button>
+      <div class="dialog-kicker">ON YOUR DESKTOP</div>
+      <h2>通知与桌面设置</h2>
+      <p class="dialog-lead">窗口收进右下角系统托盘后，播放和更新检查会继续。</p>
+      <label class="desktop-option"><span>新单集 Windows 通知<small>运行期间每 5 分钟检查你的订阅</small></span><input id="desktop-notifications" type="checkbox" /></label>
+      <label class="desktop-option"><span>关闭窗口时收进托盘<small>退出客户端请使用下方按钮或托盘菜单</small></span><input id="desktop-close-to-tray" type="checkbox" /></label>
+      <label class="desktop-option"><span>最小化时收进托盘</span><input id="desktop-minimize-to-tray" type="checkbox" /></label>
+      <p id="desktop-update-status" class="desktop-update-status" role="status">等待检查订阅更新</p>
+      <div class="desktop-dialog-actions">
+        <button id="desktop-check-updates" class="secondary-button" type="button">检查订阅更新</button>
+        <button id="desktop-test-notification" class="primary-button" type="button">发送测试通知</button>
+      </div>
+      <div class="desktop-dialog-footer"><button id="all-settings-button" type="button">更多设置</button><button id="desktop-hide-button" type="button">收进托盘</button><button id="desktop-quit" type="button">退出客户端</button></div>
+    </dialog>
+    <script src="desktop-bridge.js"></script>
+    <script src="player-seek.js"></script>
+    <script src="episode_content.js"></script>
+    <script src="listening.js"></script>
+    <script src="app.js"></script>
+    <script src="desktop-ui.js"></script>
+  </body>
+</html>

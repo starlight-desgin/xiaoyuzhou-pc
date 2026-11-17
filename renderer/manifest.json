@@ -1,0 +1,48 @@
+{
+   "action": {
+      "default_icon": {
+         "128": "icons/icon-128.png",
+         "16": "icons/icon-16.png",
+         "32": "icons/icon-32.png",
+         "48": "icons/icon-48.png"
+      },
+      "default_title": "打开小宇宙桌面版"
+   },
+   "background": {
+      "service_worker": "background.js",
+      "type": "module"
+   },
+   "commands": {
+      "_execute_action": {
+         "description": "打开或聚焦小宇宙桌面版",
+         "suggested_key": {
+            "default": "Ctrl+Shift+Y",
+            "mac": "Command+Shift+Y"
+         }
+      }
+   },
+   "content_scripts": [ {
+      "js": [ "web_timestamp.js" ],
+      "matches": [ "https://www.xiaoyuzhoufm.com/episode/*" ],
+      "run_at": "document_idle"
+   } ],
+   "content_security_policy": {
+      "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://api.xiaoyuzhoufm.com https://podcaster-api.xiaoyuzhoufm.com https://*.xiaoyuzhoufm.com https://*.xyzcdn.net; img-src 'self' data: https://*.xiaoyuzhoufm.com https://*.xyzcdn.net; media-src 'self' https://*.xiaoyuzhoufm.com https://*.xyzcdn.net;"
+   },
+   "description": "非官方小宇宙桌面扩展：发现、订阅、音频下载、本地或云端 ASR 与多模型 AI 总结。",
+   "host_permissions": [ "https://api.xiaoyuzhoufm.com/*", "https://podcaster-api.xiaoyuzhoufm.com/*", "https://media.xyzcdn.net/*", "https://*.xyzcdn.net/*", "https://*.xiaoyuzhoufm.com/*" ],
+   "icons": {
+      "128": "icons/icon-128.png",
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png"
+   },
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyxN5ucUV5qNpz4wU1fzzmqV2tE8XIO3HGO+xGkBX15eh3qnbEkCg+OXql9CipHeKI3EhpyXh8fKS4nwKBMQnIaLDqvPGXUwUjA5SKmDfUWhZiIr7itZVCWb/YqqtYDuTy1TPicXqC4DQWGA6TafhJnpI7b1XA94qXWqLL98b3Q3rGvtKqioskAn7prVNf7XocBUuYQvZEuFyxNUrOND6DD0yhElYkt6yWZDpan43vfmr6C4cup7JtnzZYr1OujJ1Ol9Vv3hsCJ/INPVe9pOF2YZEvreRKk/JIV6A+pjckb9gzEa5LAlhwFSnGYSQVds3WcqtTqVoMyu9usRIJVS0JwIDAQAB",
+   "manifest_version": 3,
+   "minimum_chrome_version": "110",
+   "name": "小宇宙桌面版",
+   "permissions": [ "storage", "windows", "cookies", "alarms", "clipboardWrite", "downloads", "nativeMessaging" ],
+   "short_name": "小宇宙",
+   "update_url": "https://clients2.google.com/service/update2/crx",
+   "version": "0.5.11"
+}
