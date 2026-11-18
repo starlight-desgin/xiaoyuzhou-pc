@@ -1,6 +1,5 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const { createBackend } = require('../lib/backend.cjs');
 
 const session = { user: { uid: 'listener' }, deviceId: 'test-device', accessToken: 'old-test', refreshToken: 'refresh-test' };
@@ -12,7 +11,7 @@ function setup(initial, fetch) {
     { name: 'x-jike-refresh-token', value: 'cookie-refresh-test' }];
   let reads = 0;
   const create = () => createBackend({
-    rendererDir: path.join(__dirname, '../renderer'), publish() {},
+    publish() {},
     store: { get: (k, fallback) => structuredClone(values[k] ?? fallback),
       set: (k, v) => { values[k] = structuredClone(v); } },
     cookies: async () => { reads++; return simulatedCookies; },

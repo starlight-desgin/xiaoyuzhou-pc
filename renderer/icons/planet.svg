@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="graphite" x2=".78" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#41464b"/><stop offset=".56" stop-color="#24272b"/><stop offset="1" stop-color="#191b1e"/>
+    </linearGradient>
+    <linearGradient id="silver" x1=".24" y1="0" x2=".82" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#ffffff"/><stop offset="1" stop-color="#cbd0d5"/>
+    </linearGradient>
+  </defs>
+  <rect x="5" y="5" width="246" height="246" rx="60" fill="url(#graphite)" stroke="#55585c" stroke-width="2"/>
+  <g transform="translate(128 130) rotate(-28)">
+    <ellipse rx="91" ry="26" fill="none" stroke="#e7eaec" stroke-width="9"/>
+    <circle r="55" fill="url(#silver)"/>
+    <path d="M-91 0c0 14.36 40.75 26 91 26S91 14.36 91 0" fill="none" stroke="#282b2f" stroke-width="20"/>
+    <path d="M-91 0c0 14.36 40.75 26 91 26S91 14.36 91 0" fill="none" stroke="#f6f7f8" stroke-width="9" stroke-linecap="round"/>
+  </g>
+  <circle cx="183" cy="63" r="7" fill="#f6f7f8"/>
+</svg>

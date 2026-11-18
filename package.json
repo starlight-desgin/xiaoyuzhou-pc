@@ -1,20 +1,23 @@
 {
   "name": "xiaoyuzhou-desktop-client",
   "productName": "小宇宙桌面版",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
-  "description": "小宇宙桌面客户端：进度拖动、系统托盘与订阅更新通知",
+  "description": "小宇宙 Windows 播客播放器",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
     "test": "node --test test/*.test.cjs",
     "build:native": "node scripts/build-native.cjs",
-    "build": "node scripts/build.cjs"
+    "build": "node scripts/build.cjs",
+    "test:ui": "node scripts/test-ui.cjs",
+    "build:icons": "electron scripts/build-icons.cjs"
   },
   "devDependencies": {
-    "electron": "45.3.3",
     "@electron/asar": "^4.0.1",
-    "rcedit": "^5.0.2",
-    "classic-level": "^3.0.0"
+    "classic-level": "^3.0.0",
+    "electron": "45.3.3",
+    "playwright-core": "1.60.0",
+    "rcedit": "^5.0.2"
   }
 }

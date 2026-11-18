@@ -28,9 +28,13 @@ function copyTree(source, destination) {
   fs.mkdirSync(path.join(dist, 'resources', 'native'), { recursive: true });
   fs.copyFileSync(path.join(root, '.build', 'native', 'xyz-helper.exe'), path.join(dist, 'resources', 'native', 'xyz-helper.exe'));
   fs.copyFileSync(path.join(root, 'LICENSE.upstream'), path.join(dist, 'LICENSE.upstream'));
+  const icon = path.join(root, 'renderer', 'icons', 'app.ico');
+  const iconDir = path.join(dist, 'resources', 'icons');
+  fs.mkdirSync(iconDir, { recursive: true });
+  fs.copyFileSync(icon, path.join(iconDir, 'planet-' + version + '.ico'));
   const { rcedit } = await import('rcedit');
   await rcedit(exe, {
-    icon: path.join(root, 'renderer', 'icons', 'app.ico'),
+    icon,
     'file-version': version, 'product-version': version,
     'version-string': { ProductName: '小宇宙桌面版', FileDescription: '小宇宙桌面客户端',
       OriginalFilename: '小宇宙.exe', CompanyName: 'Local Desktop', LegalCopyright: 'Based on QWE38qwe/xiaoyuzhou-desktop (MIT)' }
@@ -39,9 +43,10 @@ function copyTree(source, destination) {
     '小宇宙桌面版\r\n\r\n双击“小宇宙.exe”即可使用，无需 Chrome。\r\n' +
     '关闭窗口或最小化会收进右下角系统托盘，音频会继续播放。\r\n' +
     '单击托盘图标恢复窗口；右击可播放、暂停、快进、检查更新或退出。\r\n' +
-    '右上角铃铛可管理新单集通知与系统托盘。\r\n' +
+    '顶部铃铛可管理新单集通知与系统托盘。\r\n' +
     '登录后在客户端运行期间每 5 分钟检查订阅新单集；首次只建立记录，不提醒旧节目。\r\n' +
     'Windows 专注助手或关闭系统通知可能使通知不显示。\r\n' +
+    '点标题查看详情，点播放留在当前列表。Ctrl K 搜索，点底部封面回到收听页。\r\n' +
     '在官方窗口登录一次，客户端会自动记住账号。收听页能按单集续播，可拖动波形或底部进度条。\r\n' +
     '账号及设置保存在当前 Windows 用户的 AppData\\Roaming\\XiaoyuzhouDesktop，使用 Windows 加密。\r\n' +
     '可从桌面快捷方式打开客户端。\r\n', 'utf8');

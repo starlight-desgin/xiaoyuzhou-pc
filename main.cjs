@@ -27,7 +27,10 @@ let quitTimer;
 let quitConfirmed = false;
 const notices = new Set();
 const jobs = new Set();
-const iconPath = path.join(RENDERER, 'icons', 'app.ico');
+const iconPath = app.isPackaged ? path.join(process.resourcesPath, 'icons', 'planet-' + app.getVersion() + '.ico')
+  : path.join(RENDERER, 'icons', 'app.ico');
+const nativeHostPath = app.isPackaged ? path.join(process.resourcesPath, 'native', 'xyz-helper.exe')
+  : path.join(__dirname, '.build', 'native', 'xyz-helper.exe');
 const desktopDefaults = { notifications: true, closeToTray: true, minimizeToTray: true };
 const prefs = () => ({ ...desktopDefaults, ...store.get('desktopSettings', {}) });
 const log = event => {
@@ -157,10 +160,8 @@ async function nativeRequest(message) {
     fs.copyFileSync(source, target);
     return { path: target, markdown: target };
   }
-  const host = app.isPackaged ? path.join(process.resourcesPath, 'native', 'xyz-helper.exe')
-    : path.join(__dirname, '.build', 'native', 'xyz-helper.exe');
   return new Promise((resolve, reject) => {
-    const child = spawn(host, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+    const child = spawn(nativeHostPath, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, XYZ_DESKTOP_DATA: DATA } });
     jobs.add(child);
     const chunks = [];
@@ -214,17 +215,17 @@ function registerShortcuts() {
   for (const location of locations) {
     fs.mkdirSync(path.dirname(location), { recursive: true });
     const saved = shell.writeShortcutLink(location, fs.existsSync(location) ? 'update' : 'create', {
-      target: process.execPath, cwd: path.dirname(process.execPath), icon: process.execPath, iconIndex: 0,
+      target: process.execPath, cwd: path.dirname(process.execPath), icon: iconPath, iconIndex: 0,
       appUserModelId: APP_ID, description: '小宇宙 · 后台播放与新单集通知', args: ''
     });
     if (!saved) log('shortcut-registration-failed');
   }
 }
 function createWindow() {
-  const bounds = store.get('windowBounds', { width: 1080, height: 850 });
+  const bounds = store.get('windowBounds', { width: 1160, height: 824 });
   const area = screen.getPrimaryDisplay().workArea;
-  const width = Math.min(Math.max(600, bounds.width || 1080), area.width);
-  const height = Math.min(Math.max(560, bounds.height || 850), area.height);
+  const width = Math.min(Math.max(600, bounds.width || 1160), area.width);
+  const height = Math.min(Math.max(560, bounds.height || 824), area.height);
   win = new BrowserWindow({ title: '小宇宙桌面版', width, height, minWidth: 600, minHeight: 560,
     icon: iconPath, backgroundColor: '#ffffff', autoHideMenuBar: true, show: false,
     titleBarStyle: 'hidden', titleBarOverlay: { color: '#ffffff', symbolColor: '#1b1b1d', height: 54 },
@@ -235,7 +236,10 @@ function createWindow() {
   win.webContents.on('render-process-gone', (_event, details) => log(`renderer-stopped-${details.reason}`));
   win.once('ready-to-show', () => { win.show(); log('window-ready'); });
   win.on('close', event => {
-    if (!quitting && prefs().closeToTray) { event.preventDefault(); win.hide(); log('hidden-to-tray'); }
+    if (quitting) return;
+    event.preventDefault();
+    if (prefs().closeToTray) { win.hide(); log('hidden-to-tray'); }
+    else app.quit(); // Keep the window alive until the renderer checkpoints playback.
   });
   win.on('minimize', () => { if (prefs().minimizeToTray && tray) { win.hide(); log('minimized-to-tray'); } });
   let boundsTimer;
@@ -276,6 +280,10 @@ function demoRequest(message) {
   if (message.type === 'get-auth' || message.type === 'restore-auth') return Promise.resolve({ accessToken: 'local-demo', user: { uid: 'demo-user', nickname: '播放器验证' } });
   if (message.type === 'api') {
     const { endpoint, body } = message.payload;
+    if (endpoint === '/search') {
+      const items = body.type === 'PODCAST' ? episodes.map(episode => episode.podcast) : episodes;
+      return Promise.resolve({ data: items.filter(item => [item.title, item.podcast?.title].some(title => title?.includes(body.keyword))) });
+    }
     if (endpoint === '/subscription') return Promise.resolve({ data: episodes.map(e => e.podcast) });
     if (endpoint === '/episode_detail') return Promise.resolve({ data: episodes.find(e => e.eid === body.eid) });
     if (endpoint === '/episode_list') return Promise.resolve({ data: episodes.filter(e => e.podcast.pid === body.pid) });
@@ -337,7 +345,7 @@ else {
     });
     session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     session.defaultSession.setPermissionCheckHandler(() => false);
-    backend = createBackend({ store, rendererDir: RENDERER,
+    backend = createBackend({ store, nativeHostPath,
       fetch: (url, options) => net.fetch(url, options), nativeRequest, download, officialLogin: openOfficialLogin,
       cookies: options => session.fromPartition('persist:official-login').cookies.get(options),
       clearOfficialLogin: async () => {

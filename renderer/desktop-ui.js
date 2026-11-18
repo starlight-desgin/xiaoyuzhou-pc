@@ -40,7 +40,7 @@
     if (command.type === 'toggle-play') document.querySelector('#play-button').click();
     if (command.type === 'skip') skipBy(command.seconds);
     if (command.type === 'subscriptions') setRoute('subscriptions');
-    if (command.type === 'open-episode') await openEpisode({ type: 'EPISODE', eid: command.eid });
+    if (command.type === 'open-episode') await openEpisode({ type: 'EPISODE', eid: command.eid }, { navigate: true });
   });
   function playback() {
     if (!state.current) return;

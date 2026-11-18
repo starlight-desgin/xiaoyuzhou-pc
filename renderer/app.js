@@ -21,8 +21,6 @@ const SUMMARY_PROVIDER_DEFAULTS = {
 const state = {
   route: "listen",
   searchType: "episode",
-  feed: [],
-  subscriptions: [],
   current: null,
   listeningHistory: [],
   episodeDetails: new Map(),
@@ -49,13 +47,8 @@ const state = {
   summaryPromptEditorId: ""
 };
 
-const routeMeta = {
-  listen: ["", "收听"],
-  discover: ["EXPLORE", "发现"],
-  search: ["FIND YOUR NEXT STORY", "搜索"],
-  subscriptions: ["YOUR LIBRARY", "我的订阅"],
-  settings: ["PREFERENCES", "设置"]
-};
+const routeTitles = { listen: "收听", discover: "发现", subscriptions: "我的订阅", history: "播放历史", search: "搜索", settings: "设置" };
+const navigationTrail = [];
 
 const SEARCH_TYPES = ["episode", "podcast"];
 const SEARCH_TYPE_LABELS = {
@@ -63,14 +56,10 @@ const SEARCH_TYPE_LABELS = {
   podcast: "节目"
 };
 
-function send(type, payload = {}) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type, ...payload }, (response) => {
-      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-      if (!response?.ok) return reject(new Error(response?.error || "请求失败"));
-      resolve(response.data);
-    });
-  });
+async function send(type, payload = {}) {
+  const result = await window.xyzDesktop.request({ type, ...payload });
+  if (!result?.ok) throw new Error(result?.error || "请求失败");
+  return result.data;
 }
 
 function api(endpoint, body = {}, method = "POST") {
@@ -114,8 +103,8 @@ function refreshSummaryIndicators(episodeId = "") {
 function moreActions(content, className = "") {
   if (!content) return "";
   return `<details class="action-menu ${className}">
-    <summary class="more-button" title="更多操作" aria-label="更多操作">⋮</summary>
-    <div class="action-menu-panel" role="menu">${content}</div>
+    <summary class="more-button" title="更多操作" aria-label="更多操作">${icon("more")}</summary>
+    <div class="action-menu-panel">${content}</div>
   </details>`;
 }
 
@@ -163,27 +152,6 @@ function extractContent(response) {
   };
   walk(response);
   return [...new Map(items.map((item) => [`${episodeIdOf(item)}:${podcastIdOf(item)}`, item])).values()];
-}
-
-function unwrapDiscovery(response) {
-  const collections = listOf(response);
-  return collections.flatMap((collection) => {
-    if (collection?.type !== "DISCOVERY_COLLECTION") return [collection];
-    const sections = Array.isArray(collection?.data) ? collection.data : [collection?.data || collection];
-    return sections.flatMap((section) => {
-      const targets = section?.target || collection?.target || [];
-      return targets.map((target) => target?.episode || target?.podcast || target).filter(Boolean);
-    });
-  }).filter((item) => item?.type !== "HEADER" && item?.type !== "FOOTER");
-}
-
-function unwrapCollectionItems(response) {
-  const items = listOf(response);
-  return items.flatMap((item) => {
-    if (item?.type !== "DISCOVERY_COLLECTION") return [item];
-    const sections = Array.isArray(item.data) ? item.data : [item.data || item];
-    return sections.flatMap((section) => section?.target || []).map((target) => target?.episode || target?.podcast || target).filter(Boolean);
-  }).filter((item) => !["HEADER", "FOOTER"].includes(item?.type));
 }
 
 function unwrapDetail(response) {
@@ -362,25 +330,36 @@ function setTranscriptionStatus(message = "", type = "pending") {
 }
 
 function setRoute(route) {
+  if (!Object.hasOwn(routeTitles, route)) return;
+  navigationTrail.length = 0;
   state.podcastView = null;
   state.episodeView = null;
   state.route = route;
-  $$(".nav-item").forEach(item => {
-    const selected = item.dataset.route === route;
-    item.classList.toggle("is-active", selected);
-    if (selected) item.setAttribute("aria-current","page"); else item.removeAttribute("aria-current");
-  });
-  const [eyebrow, title] = routeMeta[route];
-  $("#route-eyebrow").textContent = eyebrow;
-  $("#route-title").textContent = title;
-  $("#back-button").hidden = true;
   renderRoute();
+  window.scrollTo(0, 0);
+}
+
+function showDetail(views) {
+  navigationTrail.push({ podcastView: state.podcastView, episodeView: state.episodeView, scrollY: window.scrollY });
+  state.podcastView = views.podcastView || null;
+  state.episodeView = views.episodeView || null;
+  renderRoute();
+  window.scrollTo(0, 0);
+}
+
+function goBack() {
+  const previous = navigationTrail.pop();
+  if (!previous) return;
+  state.podcastView = previous.podcastView;
+  state.episodeView = previous.episodeView;
+  renderRoute();
+  requestAnimationFrame(() => window.scrollTo(0, previous.scrollY));
 }
 
 function markConnection() {
   const account = $("#account-button");
   const accountName = state.auth?.user?.nickname || state.auth?.user?.name || "";
-  $("#account-label").textContent = state.auth ? "已登录" : "登录";
+  $("#account-label").textContent = state.auth ? (accountName || "已登录") : "登录";
   account.title = state.auth ? (accountName || "已登录") + " · 账号设置" : "登录小宇宙";
   account.setAttribute("aria-label", account.title);
   account.classList.toggle("is-logged", Boolean(state.auth));
@@ -388,1208 +367,28 @@ function markConnection() {
 
 function renderRoute() {
   const root = $("#page-content");
-  document.body.classList.toggle("episode-reading-layout", Boolean(state.episodeView));
-  const home = state.route === "listen" && !state.episodeView && !state.podcastView;
-  mountListeningLayout(home);
-  if (home) return;
+  const detail = Boolean(state.episodeView || state.podcastView);
+  document.body.classList.toggle("detail-layout", detail);
+  $("#back-button").hidden = !navigationTrail.length;
+  $("#route-title").textContent = routeTitles[state.route];
+  $("#route-meta").textContent = "";
+  $$(".nav-item[data-route]").forEach(button => {
+    const active = button.dataset.route === state.route;
+    button.classList.toggle("is-active", active);
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  const home = !detail && state.route === "listen";
+  const history = !detail && state.route === "history";
+  mountListeningLayout(home, history);
+  if (home) return renderHomePicks();
+  if (history) return;
   if (state.episodeView) return renderEpisodePage(root);
   if (state.podcastView) return renderPodcastPage(root);
   if (state.route === "search") return renderSearchPage(root);
   if (state.route === "subscriptions") return renderSubscriptionsPage(root);
   if (state.route === "settings") return renderSettingsPage(root);
   return renderDiscoverPage(root);
-}
-
-function renderDiscoverPage(root) {
-  root.innerHTML = `
-    <div class="section-heading"><h2>为你精选</h2></div>
-    <div id="discover-feed" class="feed-grid"><div class="loading">正在加载单集…</div></div>`;
-  loadDiscovery();
-}
-
-async function loadDiscovery() {
-  const holder = $("#discover-feed");
-  try {
-    let lastError;
-    for (const [endpoint, body] of [["/editor_pick", {}], ["/discovery", {}], ["/top_list", { category: "HOT" }]]) {
-      try {
-        const items = extractContent(await api(endpoint, body));
-        if (items.length) {
-          state.feed = items;
-          break;
-        }
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    if (!state.feed.length && lastError) {
-      throw lastError;
-    }
-    if (!state.feed.length) {
-      holder.innerHTML = `<div class="empty">暂无发现内容。请确认登录状态或稍后重试。</div>`;
-      return;
-    }
-    holder.innerHTML = state.feed.slice(0, 12).map((item, index) => podcastCard(item, index)).join("");
-    bindCardActions(holder, state.feed);
-  } catch (error) {
-    holder.innerHTML = `<div class="empty">${esc(error.message)}<br /><button class="mini-button" data-action="login">去登录</button></div>`;
-    holder.querySelector("[data-action=login]")?.addEventListener("click", openLogin);
-  }
-}
-
-function podcastCard(item, index) {
-  const image = imageOf(item);
-  const pid = podcastIdOf(item);
-  const canViewPodcast = Boolean(pid);
-  const subscribed = state.subscribedPids.has(pid);
-  const canResolveEpisode = Boolean(episodeIdOf(item) || pid);
-  const viewPodcast = canViewPodcast ? `<button class="mini-button" data-card-action="view-podcast">查看节目</button>` : "";
-  const summary = canResolveEpisode
-    ? summaryActionButton(item, "mini-button is-accent", 'data-card-action="summarize"')
-    : "";
-  const secondaryActions = [
-    canViewPodcast ? `<button data-card-action="subscribe" role="menuitem" ${subscribed ? "disabled" : ""}>${subscribed ? "已订阅" : "订阅节目"}</button>` : "",
-    canResolveEpisode ? `<button data-card-action="download" role="menuitem">下载音频</button>` : "",
-    canResolveEpisode ? `<button data-card-action="transcribe" role="menuitem">${transcriptActionLabel()}</button>` : "",
-    episodeIdOf(item) ? `<button data-card-action="copy-episode" role="menuitem">复制单集链接</button>` : "",
-    canViewPodcast ? `<button data-card-action="copy-podcast" role="menuitem">复制节目链接</button>` : ""
-  ].join("");
-  return `<article class="podcast-card" data-index="${index}">
-    <div class="cover">${image ? `<img src="${esc(image)}" alt="" loading="lazy" />` : ""}</div>
-    <div class="card-main">
-      <div class="card-copy"><strong title="${esc(titleOf(item))}">${esc(titleOf(item))}</strong>${episodeCardFacts(item)}</div>
-      <div class="card-actions"><button class="mini-button" data-card-action="play">播放</button>${viewPodcast}${summary}${moreActions(secondaryActions, "action-menu-card")}</div>
-    </div>
-  </article>`;
-}
-
-function bindCardActions(holder, items) {
-  $$(".podcast-card", holder).forEach((card) => {
-    card.addEventListener("click", (event) => {
-      const item = items[Number(card.dataset.index)];
-      const control = event.target.closest("button, summary");
-      if (!control) return isPodcastItem(item) ? openPodcast(item) : openEpisode(item);
-      if (control.tagName === "SUMMARY") return;
-      const action = control.dataset.cardAction;
-      closeActionMenu(control);
-      if (action === "play") openEpisode(item);
-      if (action === "view-podcast") openPodcast(item);
-      if (action === "summarize") summarizeEpisode(item, control).catch((error) => notify(error.message));
-      if (action === "subscribe") toggleSubscription(item, control);
-      if (action === "download") downloadEpisodeAudio(item);
-      if (action === "transcribe") exportEpisodeTranscript(item, control);
-      if (action === "copy-episode") copyEpisodeLink(item);
-      if (action === "copy-podcast") copyPodcastLink(item);
-    });
-  });
-}
-
-function renderSearchPage(root) {
-  root.innerHTML = `
-    <section><div class="route-eyebrow">SEARCH THE UNIVERSE</div><div class="search-bar"><input id="search-input" type="search" value="${esc(state.searchKeyword)}" placeholder="搜索节目、单集或主播" autocomplete="off" /><button id="search-submit" title="搜索">⌕</button></div>
-    <div class="filter-row"><button class="filter-button" data-search-type="episode">单集</button><button class="filter-button" data-search-type="podcast">节目</button></div><div id="search-results" class="result-list"></div></section>`;
-  $$("[data-search-type]").forEach((button) => button.classList.toggle("is-active", button.dataset.searchType === state.searchType));
-  $$("[data-search-type]").forEach((button) => button.addEventListener("click", () => {
-    state.searchType = button.dataset.searchType;
-    $$("[data-search-type]").forEach((item) => item.classList.toggle("is-active", item === button));
-    renderSearchResults($("#search-results"));
-  }));
-  $("#search-submit").addEventListener("click", performSearch);
-  $("#search-input").addEventListener("keydown", (event) => { if (event.key === "Enter") performSearch(); });
-  renderSearchResults($("#search-results"));
-}
-
-async function performSearch() {
-  const keyword = $("#search-input").value.trim();
-  const holder = $("#search-results");
-  if (!keyword) return notify("先输入一个关键词");
-  state.searchKeyword = keyword;
-  state.searchResultsByType = { episode: null, podcast: null };
-  state.searchErrorsByType = {};
-  const requestId = ++state.searchRequest;
-  renderSearchResults(holder, { loading: true });
-  const responses = await Promise.allSettled(
-    SEARCH_TYPES.map(async (type) => {
-      const response = await api("/search", {
-        keyword,
-        type: type.toUpperCase()
-      });
-      return {
-        type,
-        items: listOf(response)
-          .map(itemOf)
-          .filter((item) => item?.type === type.toUpperCase())
-      };
-    })
-  );
-  if (requestId !== state.searchRequest) return;
-  responses.forEach((result, index) => {
-    const type = SEARCH_TYPES[index];
-    if (result.status === "fulfilled") {
-      state.searchResultsByType[result.value.type] = result.value.items;
-      delete state.searchErrorsByType[result.value.type];
-    } else {
-      state.searchResultsByType[type] = [];
-      state.searchErrorsByType[type] = result.reason?.message || "搜索失败";
-    }
-  });
-  renderSearchResults(holder);
-}
-
-function renderSearchResults(holder, { loading = false } = {}) {
-  const activeType = state.searchType;
-  const label = SEARCH_TYPE_LABELS[activeType] || "内容";
-  const results = state.searchResultsByType[activeType];
-  const inputValue = $("#search-input")?.value.trim() || state.searchKeyword;
-  if (!state.searchKeyword || inputValue !== state.searchKeyword) {
-    holder.innerHTML = `<div class="empty">输入关键词，去找到下一段想听的声音。</div>`;
-    return;
-  }
-  if (loading || results === null) {
-    holder.innerHTML = `<div class="loading">正在搜索「${esc(state.searchKeyword)}」相关${esc(label)}……</div>`;
-    return;
-  }
-  const error = state.searchErrorsByType[activeType];
-  if (error) {
-    holder.innerHTML = `<div class="empty">${esc(label)}搜索失败：${esc(error)}<br /><button class="mini-button" data-retry-search>重新搜索</button></div>`;
-    holder.querySelector("[data-retry-search]")?.addEventListener("click", performSearch);
-    return;
-  }
-  holder.innerHTML = results.length
-    ? results.map((item, index) => searchResultRow(item, index)).join("")
-    : `<div class="empty">没有找到和「${esc(state.searchKeyword)}」相关的${esc(label)}。</div>`;
-  bindSearchRows(holder, results);
-}
-
-function searchResultText(item, isPodcast) {
-  return item?.description
-    || item?.brief
-    || item?.introduction
-    || item?.podcast?.title
-    || item?.podcast?.name
-    || (isPodcast ? "播客节目" : "小宇宙单集");
-}
-
-function descriptionBlock(text) {
-  const value = String(text || "").trim();
-  const collapsible = value.length > 110;
-  return `<div class="result-description-wrap${collapsible ? " is-collapsed" : ""}">
-    <span class="result-description">${esc(value)}</span>
-    ${collapsible ? '<button class="description-toggle" data-row-action="toggle-description" type="button">展开</button>' : ""}
-  </div>`;
-}
-
-function searchResultRow(item, index) {
-  const isPodcast = isPodcastItem(item);
-  const pid = podcastIdOf(item);
-  const canViewPodcast = Boolean(pid);
-  const subscribed = state.subscribedPids.has(pid);
-  const canResolveEpisode = item?.type !== "USER" && Boolean(episodeIdOf(item) || pid);
-  const secondaryActions = item?.type === "USER" ? "" : [
-    isPodcast ? `<button data-row-action="subscribe" role="menuitem" ${subscribed ? "disabled" : ""}>${subscribed ? "已订阅" : "订阅节目"}</button>` : "",
-    canResolveEpisode ? `<button data-row-action="download" role="menuitem">下载音频</button>` : "",
-    canResolveEpisode ? `<button data-row-action="transcribe" role="menuitem">${transcriptActionLabel()}</button>` : "",
-    episodeIdOf(item) ? `<button data-row-action="copy-episode" role="menuitem">复制单集链接</button>` : "",
-    canViewPodcast ? `<button data-row-action="copy-podcast" role="menuitem">复制节目链接</button>` : ""
-  ].join("");
-  const actions = item?.type === "USER" ? "" : `
-    <button class="row-action" data-row-action="play">播放</button>
-    <button class="row-action" data-row-action="view-podcast" ${canViewPodcast ? "" : "disabled"}>查看节目</button>
-    ${summaryActionButton(item, "row-action is-primary", 'data-row-action="summarize"')}
-    ${moreActions(secondaryActions, "action-menu-row")}`;
-  return `<article class="episode-row" data-index="${index}">
-    <div class="episode-thumb">${imageOf(item) ? `<img src="${esc(imageOf(item))}" alt="" />` : ""}</div>
-    <div class="episode-meta"><strong>${esc(titleOf(item))}</strong>${descriptionBlock(searchResultText(item, isPodcast))}</div>
-    <div class="row-actions">${actions}</div>
-  </article>`;
-}
-
-function bindSearchRows(holder, items) {
-  $$(".episode-row", holder).forEach((row) => row.addEventListener("click", (event) => {
-    const item = items[Number(row.dataset.index)];
-    const control = event.target.closest("button, summary");
-    if (!control) {
-      if (isPodcastItem(item)) openPodcast(item);
-      else if (episodeIdOf(item)) openEpisode(item);
-      return;
-    }
-    if (control.tagName === "SUMMARY") return;
-    const action = control.dataset.rowAction;
-    closeActionMenu(control);
-    if (action === "toggle-description") {
-      const wrapper = control.closest(".result-description-wrap");
-      wrapper?.classList.toggle("is-collapsed");
-      control.textContent = wrapper?.classList.contains("is-collapsed") ? "展开" : "收起";
-      return;
-    }
-    if (action === "play") openEpisode(item);
-    if (action === "view-podcast") openPodcast(item);
-    if (action === "summarize") summarizeEpisode(item, control).catch((error) => notify(error.message));
-    if (action === "subscribe") toggleSubscription(item, control);
-    if (action === "download") downloadEpisodeAudio(item);
-    if (action === "transcribe") exportEpisodeTranscript(item, control);
-    if (action === "copy-episode") copyEpisodeLink(item);
-    if (action === "copy-podcast") copyPodcastLink(item);
-  }));
-}
-
-function renderSubscriptionsPage(root) {
-  root.innerHTML = `<section><div class="section-heading"><h2>我的订阅</h2><span>YOUR SUBSCRIPTIONS</span></div><div id="subscriptions-list" class="feed-grid"><div class="loading">正在读取你的订阅……</div></div></section>`;
-  loadSubscriptions();
-}
-
-async function loadSubscriptions() {
-  const holder = $("#subscriptions-list");
-  try {
-    const response = await api("/subscription", { limit: "20", sortOrder: "desc", sortBy: "subscribedAt" });
-    state.subscriptions = listOf(response).map(itemOf).filter((item) => item?.type === "PODCAST");
-    state.subscriptions.forEach((item) => state.subscribedPids.add(podcastIdOf(item)));
-    holder.innerHTML = state.subscriptions.length ? state.subscriptions.slice(0, 18).map((item, index) => podcastCard(item, index)).join("") : `<div class="empty">还没有订阅节目。去发现页逛逛吧。</div>`;
-    bindCardActions(holder, state.subscriptions);
-  } catch (error) {
-    holder.innerHTML = `<div class="empty">${esc(error.message)}<br /><button class="mini-button" data-action="login">去登录</button></div>`;
-    holder.querySelector("[data-action=login]")?.addEventListener("click", openLogin);
-  }
-}
-
-function openPodcast(item) {
-  const podcast = podcastOf(item);
-  const pid = podcastIdOf(podcast);
-  if (!pid) return notify("无法识别这个节目");
-  state.episodeView = null;
-  state.podcastView = {
-    podcast,
-    episodes: null,
-    sourceRoute: state.route,
-    scrollY: window.scrollY
-  };
-  $("#route-eyebrow").textContent = "PROGRAM ARCHIVE";
-  $("#route-title").textContent = titleOf(podcast);
-  $("#back-button").hidden = false;
-  renderRoute();
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-function closePodcast() {
-  if (!state.podcastView) return;
-  const { sourceRoute, scrollY } = state.podcastView;
-  state.podcastView = null;
-  state.route = sourceRoute;
-  const [eyebrow, title] = routeMeta[sourceRoute];
-  $("#route-eyebrow").textContent = eyebrow;
-  $("#route-title").textContent = title;
-  $("#back-button").hidden = true;
-  renderRoute();
-  requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: "auto" }));
-}
-
-function closeEpisode() {
-  if (!state.episodeView) return;
-  const { scrollY } = state.episodeView;
-  state.episodeView = null;
-  if (state.podcastView) {
-    $("#route-eyebrow").textContent = "PROGRAM ARCHIVE";
-    $("#route-title").textContent = titleOf(state.podcastView.podcast);
-    $("#back-button").hidden = false;
-  } else {
-    const [eyebrow, title] = routeMeta[state.route];
-    $("#route-eyebrow").textContent = eyebrow;
-    $("#route-title").textContent = title;
-    $("#back-button").hidden = true;
-  }
-  renderRoute();
-  requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: "auto" }));
-}
-
-function timestampDeepLink(item, seconds) {
-  return XYZEpisodeContent.deepLink(episodeIdOf(item), seconds);
-}
-
-function seekToTimestamp(seconds, { scroll = false } = {}) {
-  const audio = $("#audio");
-  if (!audio.src) return notify("当前没有可跳转的播放内容");
-  const target = Math.max(0, Number(seconds) || 0);
-  audio.currentTime = Math.min(target, audio.duration || target);
-  audio.play().catch(() => notify("已定位时间点，请点击播放继续"));
-  updateActiveProgressAnchor(target);
-  if (scroll) {
-    document.querySelector(`[data-content-timestamp="${Math.floor(target)}"]`)
-      ?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
-}
-
-function renderEpisodeContentBlocks(episode) {
-  const content = episodeContentOf(episode);
-  const blocks = XYZEpisodeContent.parseContent(content);
-  if (!blocks.length) return `<div class="empty">这期暂时没有 Show Notes 正文。</div>`;
-  let listOpen = false;
-  const output = [];
-  const closeList = () => {
-    if (listOpen) output.push("</ul>");
-    listOpen = false;
-  };
-
-  blocks.forEach((block) => {
-    if (block.type !== "bullet") closeList();
-    if (block.type === "heading") {
-      output.push(`<h2>${esc(block.text)}</h2>`);
-    } else if (block.type === "timestamp") {
-      const deepLink = timestampDeepLink(episode, block.seconds);
-      output.push(`<div class="episode-timestamp-row" data-content-timestamp="${block.seconds}">
-        <button class="timestamp-button" type="button" data-seek-seconds="${block.seconds}" title="跳转到 ${esc(block.label)}">${esc(block.label)}</button>
-        <p>${esc(block.text || "从这里继续收听")}</p>
-        ${deepLink ? `<a href="${esc(deepLink)}" title="在小宇宙打开这个时间点">小宇宙 ↗</a>` : ""}
-      </div>`);
-    } else if (block.type === "bullet") {
-      if (!listOpen) {
-        output.push('<ul class="episode-content-list">');
-        listOpen = true;
-      }
-      output.push(`<li>${esc(block.text)}</li>`);
-    } else {
-      output.push(`<p>${esc(block.text)}</p>`);
-    }
-  });
-  closeList();
-  return output.join("");
-}
-
-function renderEpisodePage(root) {
-  const episode = state.episodeView.episode;
-  const published = episode?.pubDate || episode?.publishedAt || episode?.createdAt || "";
-  const publishedText = published ? new Date(published).toLocaleString("zh-CN", { dateStyle: "medium" }) : "";
-  const sourceUrl = episodeLinkOf(episode);
-  const timeline = XYZEpisodeContent.extractTimeline(episodeContentOf(episode));
-  const duration = durationOf(episode);
-  root.innerHTML = `
-    <article class="episode-content-page">
-      <header class="episode-reading-header">
-        <h1>${esc(titleOf(episode))}</h1>
-        <div class="episode-content-meta" aria-label="单集信息">
-          ${duration ? `<span>${esc(formatTime(duration))}</span>` : ""}
-          ${publishedText ? `<span>${esc(publishedText)}</span>` : ""}
-          ${sourceUrl ? `<a href="${esc(sourceUrl)}" target="_blank" rel="noreferrer">真实单集链接 ↗</a>` : ""}
-        </div>
-      </header>
-      ${timeline.length ? `<section class="episode-chapter-strip" aria-label="本期时间轴">
-        ${timeline.map((item) => `<button type="button" data-seek-seconds="${item.seconds}"><strong>${esc(item.label)}</strong><span>${esc(item.text || "继续收听")}</span></button>`).join("")}
-      </section>` : ""}
-      <section class="episode-show-notes">
-        <div class="section-heading"><h2>本期内容</h2><span>${timeline.length ? `${timeline.length} TIMESTAMPS` : "SHOW NOTES"}</span></div>
-        <div class="episode-content-body">${renderEpisodeContentBlocks(episode)}</div>
-      </section>
-    </article>`;
-  $$("[data-seek-seconds]", root).forEach((button) => button.addEventListener("click", () => seekToTimestamp(button.dataset.seekSeconds)));
-}
-
-function renderPodcastPage(root) {
-  const view = state.podcastView;
-  const podcast = view.podcast;
-  const image = imageOf(podcast);
-  const author = podcast?.author?.nickname || podcast?.author?.name || "小宇宙节目";
-  const description = podcast?.description || podcast?.brief || podcast?.introduction || "暂无节目简介。";
-  const subscribed = state.subscribedPids.has(podcastIdOf(podcast));
-  root.innerHTML = `
-    <section class="podcast-detail">
-      <header class="podcast-detail-hero">
-        <div class="podcast-detail-cover">${image ? `<img src="${esc(image)}" alt="${esc(titleOf(podcast))}" />` : "<span>◌</span>"}</div>
-        <div class="podcast-detail-copy">
-          <div class="route-eyebrow">PODCAST ARCHIVE</div>
-          <h1>${esc(titleOf(podcast))}</h1>
-          <p class="podcast-detail-author">${esc(author)}</p>
-          <p class="podcast-detail-description">${esc(description)}</p>
-          <div class="podcast-detail-actions">
-            <button id="detail-subscribe" class="primary-button" type="button" ${subscribed ? "disabled" : ""}>${subscribed ? "已订阅" : "订阅节目"}</button>
-            <button id="detail-copy-podcast" class="secondary-button" type="button">复制节目链接</button>
-          </div>
-        </div>
-      </header>
-      <div class="section-heading"><h2>全部单集</h2><span>EPISODE ARCHIVE</span></div>
-      <div id="podcast-episodes" class="result-list">${view.episodes === null ? '<div class="loading">正在读取节目单集……</div>' : ""}</div>
-    </section>`;
-  $("#detail-subscribe").addEventListener("click", (event) => toggleSubscription(podcast, event.currentTarget));
-  $("#detail-copy-podcast").addEventListener("click", () => copyPodcastLink(podcast));
-  if (view.episodes === null) loadPodcastEpisodes(view);
-  else renderPodcastEpisodes($("#podcast-episodes"), view.episodes);
-}
-
-async function loadPodcastEpisodes(view) {
-  const holder = $("#podcast-episodes");
-  try {
-    const response = await api("/episode_list", { pid: podcastIdOf(view.podcast), order: "desc" });
-    if (state.podcastView !== view) return;
-    view.episodes = extractContent(response).filter(item => episodeIdOf(item))
-      .map(episode => episodeWithPodcast(episode, view.podcast));
-    renderPodcastEpisodes(holder, view.episodes);
-  } catch (error) {
-    if (state.podcastView !== view) return;
-    holder.innerHTML = `<div class="empty">${esc(error.message)}<br /><button class="mini-button" data-retry-episodes>重新加载</button></div>`;
-    holder.querySelector("[data-retry-episodes]")?.addEventListener("click", () => {
-      holder.innerHTML = `<div class="loading">正在重新读取节目单集……</div>`;
-      loadPodcastEpisodes(view);
-    });
-  }
-}
-
-function renderPodcastEpisodes(holder, episodes) {
-  holder.innerHTML = episodes.length
-    ? episodes.map((episode, index) => podcastEpisodeRow(episode, index)).join("")
-    : `<div class="empty">这个节目暂时没有可展示的单集。</div>`;
-  bindPodcastEpisodeRows(holder, episodes);
-}
-
-function podcastEpisodeRow(episode, index) {
-  const published = episode?.pubDate || episode?.publishedAt || episode?.createdAt || "";
-  const publishedText = published ? new Date(published).toLocaleDateString("zh-CN") : "节目单集";
-  const secondaryActions = [
-    `<button data-episode-action="download" role="menuitem">下载音频</button>`,
-    `<button data-episode-action="transcribe" role="menuitem">${transcriptActionLabel()}</button>`,
-    `<button data-episode-action="copy-episode" role="menuitem">复制单集链接</button>`,
-    `<button data-episode-action="copy-podcast" role="menuitem">复制节目链接</button>`
-  ].join("");
-  return `<article class="episode-row podcast-episode-row" data-index="${index}">
-    <div class="episode-thumb">${imageOf(episode) ? `<img src="${esc(imageOf(episode))}" alt="" />` : ""}</div>
-    <div class="episode-meta"><strong>${esc(titleOf(episode))}</strong><span>${esc(publishedText)}</span></div>
-    <div class="row-actions">
-      <button class="row-action" data-episode-action="play">播放</button>
-      <button class="row-action" data-episode-action="view-podcast">查看节目</button>
-      ${summaryActionButton(episode, "row-action is-primary", 'data-episode-action="summarize"')}
-      ${moreActions(secondaryActions, "action-menu-row")}
-    </div>
-  </article>`;
-}
-
-function bindPodcastEpisodeRows(holder, episodes) {
-  $$(".podcast-episode-row", holder).forEach((row) => row.addEventListener("click", (event) => {
-    const episode = episodes[Number(row.dataset.index)];
-    const control = event.target.closest("button, summary");
-    if (!control) return openEpisode(episode);
-    if (control.tagName === "SUMMARY") return;
-    const action = control.dataset.episodeAction;
-    closeActionMenu(control);
-    if (action === "play") openEpisode(episode);
-    if (action === "view-podcast") openPodcast(episode);
-    if (action === "summarize") summarizeEpisode(episode, control).catch((error) => notify(error.message));
-    if (action === "copy-episode") copyEpisodeLink(episode);
-    if (action === "copy-podcast") copyPodcastLink(episode);
-    if (action === "download") downloadEpisodeAudio(episode);
-    if (action === "transcribe") exportEpisodeTranscript(episode, control);
-  }));
-}
-
-function summaryProviderMeta(providerId) {
-  return SUMMARY_PROVIDERS.find((provider) => provider.id === providerId)
-    || SUMMARY_PROVIDERS[0];
-}
-
-function summaryModelById(id) {
-  return state.summaryModelDrafts.find((model) => model.id === id);
-}
-
-function summaryModelHost(endpoint) {
-  try {
-    return new URL(endpoint).hostname;
-  } catch {
-    return "接口地址无效";
-  }
-}
-
-function renderSummaryModelStatus() {
-  const node = $("#summary-provider-status");
-  if (!node) return;
-  const enabled = state.summaryModelDrafts.filter((model) => model.enabled);
-  const configured = enabled.filter((model) => state.summaryModelCredentialStatus[model.id]);
-  node.classList.toggle("is-ready", enabled.length > 0 && configured.length > 0);
-  node.textContent = !enabled.length
-    ? "尚未启用模型，AI 总结暂不可用"
-    : `已启用 ${enabled.length} 个模型 · ${configured.length} 个已有凭据 · 默认：${enabled[0].name}`;
-}
-
-function renderSummaryModelList() {
-  const holder = $("#summary-model-list");
-  if (!holder) return;
-  const defaultModel = state.summaryModelDrafts.find((model) => model.enabled);
-  holder.innerHTML = state.summaryModelDrafts.length
-    ? state.summaryModelDrafts.map((model, index) => {
-        const provider = summaryProviderMeta(model.provider);
-        const configured = Boolean(state.summaryModelCredentialStatus[model.id]);
-        return `<article class="summary-model-row${model.enabled ? "" : " is-disabled"}" draggable="true" data-summary-model-id="${esc(model.id)}">
-          <span class="summary-model-drag" aria-hidden="true">⠿</span>
-          <button class="summary-model-main" type="button" data-edit-summary-model="${esc(model.id)}">
-            <strong>${esc(model.name)}${defaultModel?.id === model.id ? '<span class="default-model-badge">默认</span>' : ""}</strong>
-            <span>${esc(provider.label)} · ${esc(model.model)} · ${esc(summaryModelHost(model.endpoint))}</span>
-          </button>
-          <span class="model-key-state${configured ? " is-ready" : ""}">${configured ? "已配置" : "缺少 Key"}</span>
-          <label class="model-toggle" aria-label="${esc(`${model.name}启用状态`)}">
-            <input type="checkbox" data-toggle-summary-model="${esc(model.id)}" ${model.enabled ? "checked" : ""} />
-            <span></span>
-          </label>
-          <div class="model-order-actions">
-            <button type="button" data-move-summary-model="${esc(model.id)}" data-direction="-1" aria-label="上移" ${index === 0 ? "disabled" : ""}>↑</button>
-            <button type="button" data-move-summary-model="${esc(model.id)}" data-direction="1" aria-label="下移" ${index === state.summaryModelDrafts.length - 1 ? "disabled" : ""}>↓</button>
-          </div>
-          <button class="model-delete-button" type="button" data-delete-summary-model="${esc(model.id)}" aria-label="删除模型">×</button>
-        </article>`;
-      }).join("")
-    : `<div class="empty">还没有 AI 总结模型。点击“添加模型”开始配置。</div>`;
-  renderSummaryModelStatus();
-  bindSummaryModelList();
-}
-
-async function persistSummaryModels() {
-  state.settings = await send("update-settings", {
-    settings: {
-      summaryModels: state.summaryModelDrafts.map((model) => ({ ...model }))
-    }
-  });
-  state.summaryModelDrafts = state.settings.summaryModels.map((model) => ({ ...model }));
-}
-
-function snapshotSummaryModels() {
-  return state.summaryModelDrafts.map((model) => ({ ...model }));
-}
-
-async function commitSummaryModelMutation(previousModels) {
-  if (state.summaryModelMutationPending) {
-    throw new Error("模型配置正在保存，请稍后再试");
-  }
-  state.summaryModelMutationPending = true;
-  try {
-    await persistSummaryModels();
-  } catch (error) {
-    state.summaryModelDrafts = previousModels;
-    throw error;
-  } finally {
-    state.summaryModelMutationPending = false;
-    renderSummaryModelList();
-  }
-}
-
-async function refreshSummaryModelCredentialStatus() {
-  if (!state.summaryModelDrafts.length) {
-    state.summaryModelCredentialStatus = {};
-    renderSummaryModelList();
-    return;
-  }
-  try {
-    const result = await send("get-summary-model-credential-status", {
-      models: state.summaryModelDrafts.map(({ id, provider }) => ({ id, provider }))
-    });
-    state.summaryModelCredentialStatus = result.configured || {};
-  } catch {
-    state.summaryModelCredentialStatus = {};
-  }
-  renderSummaryModelList();
-}
-
-function openSummaryModelEditor(modelId = "") {
-  if (!modelId && state.summaryModelDrafts.length >= 20) {
-    notify("最多配置 20 个 AI 总结模型");
-    return;
-  }
-  const existing = summaryModelById(modelId);
-  const provider = existing?.provider || "qwen";
-  const defaults = SUMMARY_PROVIDER_DEFAULTS[provider];
-  const model = existing || {
-    id: `model-${crypto.randomUUID()}`,
-    name: "新模型",
-    provider,
-    endpoint: defaults.endpoint,
-    model: defaults.model,
-    enabled: true
-  };
-  state.summaryModelEditorId = model.id;
-  $("#summary-model-dialog-title").textContent = existing ? "编辑模型" : "添加模型";
-  $("#summary-model-id").value = model.id;
-  $("#summary-model-name").value = model.name;
-  $("#summary-model-provider").value = model.provider;
-  $("#summary-model-endpoint").value = model.endpoint;
-  $("#summary-model-model").value = model.model;
-  $("#summary-model-api-key").value = "";
-  $("#summary-model-enabled").checked = model.enabled;
-  $("#summary-model-status").className = "code-status";
-  $("#summary-model-status").textContent = state.summaryModelCredentialStatus[model.id]
-    ? "API Key 已安全保存；留空不会覆盖。"
-    : "尚未保存 API Key。";
-  $("#clear-summary-model-key").disabled = !state.summaryModelCredentialStatus[model.id];
-  $("#summary-model-dialog").showModal();
-}
-
-function summaryModelFromEditor() {
-  const provider = $("#summary-model-provider").value;
-  return {
-    id: $("#summary-model-id").value,
-    name: $("#summary-model-name").value.trim(),
-    provider,
-    endpoint: $("#summary-model-endpoint").value.trim(),
-    model: $("#summary-model-model").value.trim(),
-    enabled: $("#summary-model-enabled").checked
-  };
-}
-
-function validatedSummaryModelFromEditor() {
-  const model = summaryModelFromEditor();
-  if (!model.name) throw new Error("请输入模型名称");
-  if (!model.endpoint) throw new Error("请输入 Base URL");
-  if (!model.model) throw new Error("请输入 Model ID");
-  let endpoint;
-  try {
-    endpoint = new URL(model.endpoint);
-  } catch {
-    throw new Error("Base URL 格式无效");
-  }
-  if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password) {
-    throw new Error("Base URL 必须使用无凭据的 HTTPS 地址");
-  }
-  return model;
-}
-
-async function saveSummaryModelEditor({ close = true } = {}) {
-  const model = validatedSummaryModelFromEditor();
-  const apiKey = $("#summary-model-api-key").value.trim();
-  const previousModels = snapshotSummaryModels();
-  const index = state.summaryModelDrafts.findIndex((item) => item.id === model.id);
-  if (index >= 0) state.summaryModelDrafts[index] = model;
-  else state.summaryModelDrafts.push(model);
-  await commitSummaryModelMutation(previousModels);
-  if (apiKey) {
-    try {
-      const result = await send("save-summary-model-credential", {
-        modelId: model.id,
-        apiKey
-      });
-      state.summaryModelCredentialStatus[model.id] = Boolean(result.configured);
-    } catch (error) {
-      const failedModels = snapshotSummaryModels();
-      state.summaryModelDrafts = previousModels;
-      try {
-        await commitSummaryModelMutation(failedModels);
-      } catch (rollbackError) {
-        throw new Error(`${error.message}；恢复原模型配置失败：${rollbackError.message}`);
-      }
-      throw error;
-    }
-  }
-  renderSummaryModelList();
-  if (close) $("#summary-model-dialog").close();
-  return model;
-}
-
-function bindSummaryModelList() {
-  $$("[data-edit-summary-model]").forEach((button) => button.addEventListener("click", () => {
-    openSummaryModelEditor(button.dataset.editSummaryModel);
-  }));
-  $$("[data-toggle-summary-model]").forEach((input) => input.addEventListener("change", async () => {
-    if (state.summaryModelMutationPending) return renderSummaryModelList();
-    const previousModels = snapshotSummaryModels();
-    const model = summaryModelById(input.dataset.toggleSummaryModel);
-    if (!model) return;
-    model.enabled = input.checked;
-    try {
-      await commitSummaryModelMutation(previousModels);
-    } catch (error) {
-      notify(error.message);
-    }
-  }));
-  $$("[data-move-summary-model]").forEach((button) => button.addEventListener("click", async () => {
-    if (state.summaryModelMutationPending) return;
-    const previousModels = snapshotSummaryModels();
-    const index = state.summaryModelDrafts.findIndex((item) => item.id === button.dataset.moveSummaryModel);
-    const target = index + Number(button.dataset.direction);
-    if (index < 0 || target < 0 || target >= state.summaryModelDrafts.length) return;
-    [state.summaryModelDrafts[index], state.summaryModelDrafts[target]] = [
-      state.summaryModelDrafts[target],
-      state.summaryModelDrafts[index]
-    ];
-    try {
-      await commitSummaryModelMutation(previousModels);
-    } catch (error) {
-      notify(error.message);
-    }
-  }));
-  $$("[data-delete-summary-model]").forEach((button) => button.addEventListener("click", async () => {
-    if (state.summaryModelMutationPending) return;
-    const model = summaryModelById(button.dataset.deleteSummaryModel);
-    if (state.summaryModelDrafts.length === 1) return notify("至少保留一个模型配置");
-    if (!model || !confirm(`确认删除模型“${model.name}”？`)) return;
-    const previousModels = snapshotSummaryModels();
-    state.summaryModelDrafts = state.summaryModelDrafts.filter((item) => item.id !== model.id);
-    try {
-      await commitSummaryModelMutation(previousModels);
-      try {
-        await send("save-summary-model-credential", { modelId: model.id, clear: true });
-      } catch (error) {
-        const deletedModels = snapshotSummaryModels();
-        state.summaryModelDrafts = previousModels;
-        try {
-          await commitSummaryModelMutation(deletedModels);
-        } catch (rollbackError) {
-          throw new Error(`${error.message}；恢复模型配置失败：${rollbackError.message}`);
-        }
-        throw error;
-      }
-      delete state.summaryModelCredentialStatus[model.id];
-      renderSummaryModelList();
-    } catch (error) {
-      notify(error.message);
-    }
-  }));
-  $$(".summary-model-row").forEach((row) => {
-    row.addEventListener("dragstart", (event) => event.dataTransfer.setData("text/plain", row.dataset.summaryModelId));
-    row.addEventListener("dragover", (event) => event.preventDefault());
-    row.addEventListener("drop", async (event) => {
-      event.preventDefault();
-      if (state.summaryModelMutationPending) return;
-      const sourceId = event.dataTransfer.getData("text/plain");
-      const targetId = row.dataset.summaryModelId;
-      const source = state.summaryModelDrafts.findIndex((item) => item.id === sourceId);
-      const target = state.summaryModelDrafts.findIndex((item) => item.id === targetId);
-      if (source < 0 || target < 0 || source === target) return;
-      const previousModels = snapshotSummaryModels();
-      const [model] = state.summaryModelDrafts.splice(source, 1);
-      state.summaryModelDrafts.splice(target, 0, model);
-      try {
-        await commitSummaryModelMutation(previousModels);
-      } catch (error) {
-        notify(error.message);
-      }
-    });
-  });
-}
-
-function initializeSummaryModelDialog() {
-  $("#summary-model-provider").addEventListener("change", (event) => {
-    const defaults = SUMMARY_PROVIDER_DEFAULTS[event.target.value];
-    $("#summary-model-endpoint").value = defaults.endpoint;
-    $("#summary-model-model").value = defaults.model;
-  });
-  $("#summary-model-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const button = $("#save-summary-model");
-    button.disabled = true;
-    button.textContent = "保存中…";
-    try {
-      await saveSummaryModelEditor();
-      notify("模型配置已保存");
-    } catch (error) {
-      $("#summary-model-status").className = "code-status is-error";
-      $("#summary-model-status").textContent = error.message;
-    } finally {
-      button.disabled = false;
-      button.textContent = "完成";
-    }
-  });
-  $("#clear-summary-model-key").addEventListener("click", async (event) => {
-    const modelId = $("#summary-model-id").value;
-    if (!confirm("确认清除这个模型的 API Key？")) return;
-    const button = event.currentTarget;
-    button.disabled = true;
-    try {
-      const result = await send("save-summary-model-credential", {
-        modelId,
-        clear: true
-      });
-      state.summaryModelCredentialStatus[modelId] = Boolean(result.configured);
-      $("#summary-model-status").className = "code-status";
-      $("#summary-model-status").textContent = "API Key 已清除。";
-      renderSummaryModelList();
-    } catch (error) {
-      $("#summary-model-status").className = "code-status is-error";
-      $("#summary-model-status").textContent = error.message;
-    } finally {
-      button.disabled = !state.summaryModelCredentialStatus[modelId];
-    }
-  });
-  $("#test-summary-model").addEventListener("click", async (event) => {
-    const button = event.currentTarget;
-    button.disabled = true;
-    button.textContent = "测试中…";
-    $("#summary-model-status").className = "code-status is-pending";
-    $("#summary-model-status").textContent = "正在连接模型服务…";
-    try {
-      const model = validatedSummaryModelFromEditor();
-      const apiKey = $("#summary-model-api-key").value.trim();
-      await send("test-summary-model", { model, apiKey });
-      $("#summary-model-status").className = "code-status is-success";
-      $("#summary-model-status").textContent = "连接成功。点击“完成”后保存配置。";
-    } catch (error) {
-      $("#summary-model-status").className = "code-status is-error";
-      $("#summary-model-status").textContent = error.message;
-    } finally {
-      button.disabled = false;
-      button.textContent = "测试连接";
-    }
-  });
-}
-
-function renderSettingsPage(root) {
-  const settings = state.settings || {};
-  const allowedTabs = new Set(["files", "asr", "summary", "account"]);
-  const activeSettingsTab = allowedTabs.has(state.settingsTab) ? state.settingsTab : "files";
-  state.settingsTab = activeSettingsTab;
-  const panelHidden = (id) => activeSettingsTab === id ? "" : "hidden";
-  const audioPath = String(settings.audioDownloadPath || "");
-  const transcriptPath = String(settings.transcriptDownloadPath || "");
-  const summaryPath = String(settings.summaryDownloadPath || "");
-  state.summaryModelDrafts = (settings.summaryModels || []).map((model) => ({ ...model }));
-  state.summaryPromptDrafts = (settings.summaryPromptVersions || []).map((prompt) => ({ ...prompt }));
-  root.innerHTML = `
-    <section class="settings-page">
-      <nav class="settings-tabs" role="tablist" aria-label="设置分类">
-        <button type="button" role="tab" aria-selected="${activeSettingsTab === "files"}" data-settings-tab="files" class="${activeSettingsTab === "files" ? "is-active" : ""}">文件与助手</button>
-        <button type="button" role="tab" aria-selected="${activeSettingsTab === "asr"}" data-settings-tab="asr" class="${activeSettingsTab === "asr" ? "is-active" : ""}">文字稿与 ASR</button>
-        <button type="button" role="tab" aria-selected="${activeSettingsTab === "summary"}" data-settings-tab="summary" class="${activeSettingsTab === "summary" ? "is-active" : ""}">AI 总结</button>
-        <button type="button" role="tab" aria-selected="${activeSettingsTab === "account"}" data-settings-tab="account" class="${activeSettingsTab === "account" ? "is-active" : ""}">账号</button>
-      </nav>
-      <form id="settings-form" class="settings-form">
-        <section class="settings-section settings-panel" data-settings-panel="files" ${panelHidden("files")}>
-          <div class="settings-section-heading"><h3>文件与本地助手</h3></div>
-          <label>音频保存目录
-            <div class="path-input-row"><input id="audio-download-path" type="text" value="${esc(audioPath)}" placeholder="留空使用浏览器默认下载目录/小宇宙音频" autocomplete="off" /><button type="button" class="secondary-button" data-choose-directory="audio-download-path">选择目录</button></div>
-          </label>
-          <label>文字稿保存目录
-            <div class="path-input-row"><input id="transcript-download-path" type="text" value="${esc(transcriptPath)}" placeholder="留空使用浏览器默认下载目录/小宇宙转写稿" autocomplete="off" /><button type="button" class="secondary-button" data-choose-directory="transcript-download-path">选择目录</button></div>
-          </label>
-          <label>AI 总结稿保存目录
-            <div class="path-input-row"><input id="summary-download-path" type="text" value="${esc(summaryPath)}" placeholder="留空使用文字稿保存目录" autocomplete="off" /><button type="button" class="secondary-button" data-choose-directory="summary-download-path">选择目录</button></div>
-          </label>
-          <label class="checkbox-row"><input id="download-save-as" type="checkbox" ${settings.downloadSaveAs ? "checked" : ""} /><span>使用浏览器默认目录时，每次下载询问保存位置</span></label>
-          <div id="native-host-status" class="native-host-status">正在检测本地文件助手……</div>
-          <div class="native-install-guide">
-            <strong id="native-install-title">本地助手安装</strong>
-            <p id="native-install-description">正在识别操作系统并生成安装指令……</p>
-          </div>
-          <div id="native-host-diagnostics" class="native-host-diagnostics">
-            <div><span>系统</span><code id="native-platform">检测中…</code></div>
-            <div><span>扩展 ID</span><code id="native-extension-id">检测中…</code></div>
-            <div><span>Manifest</span><code id="native-manifest-path">检测中…</code></div>
-            <div><span>Host</span><code id="native-host-path">检测中…</code></div>
-            <div><span>安装命令</span><code id="native-install-command">检测中…</code></div>
-            <div class="native-host-actions">
-              <button id="copy-native-install-command" class="mini-button" type="button">复制安装命令</button>
-              <a id="native-host-help" href="https://github.com/QWE38qwe/xiaoyuzhou-desktop#3-安装-native-host" target="_blank" rel="noreferrer">查看安装说明</a>
-            </div>
-          </div>
-        </section>
-        <section class="settings-section settings-panel" data-settings-panel="asr" ${panelHidden("asr")}>
-          <div class="settings-section-heading"><h3>文字稿与 ASR</h3></div>
-          <div id="asr-settings-wrap">
-          <label>ASR 服务<select id="asr-provider"><option value="local_qwen">本地 Qwen3-ASR</option><option value="qwen">Qwen API</option><option value="doubao">豆包 API</option></select></label>
-          <div class="provider-settings" data-asr-provider-settings="local_qwen">
-            <label>本地模型<select id="local-qwen-model"><option value="Qwen/Qwen3-ASR-0.6B">Qwen3-ASR 0.6B（推荐，约 1.2GB 内存）</option><option value="Qwen/Qwen3-ASR-1.7B">Qwen3-ASR 1.7B（高精度，约 3.4GB 内存）</option></select></label>
-            <div id="local-qwen-status" class="native-host-status">正在检查本地 Qwen ASR……</div>
-            <div class="setup-steps">
-              <div><strong>1. 连接本地助手</strong><span>先在“文件与助手”完成 Native Host 安装。</span></div>
-              <div><strong>2. 安装 0.6B 运行时</strong><span>推荐 Apple Silicon Mac 新用户使用，约需 1.2GB 运行内存。</span></div>
-              <div><strong>3. 首次下载模型</strong><span>第一次转写会下载模型；后续直接复用缓存。</span></div>
-              <div><strong>4. 按任务释放内存</strong><span>每次转写结束后 Worker 自动退出，不常驻后台。</span></div>
-            </div>
-            <div class="install-command-row"><code id="local-qwen-install-command">./install_local_asr.sh</code><button id="copy-local-asr-command" class="mini-button" type="button">复制安装命令</button></div>
-            <p class="field-hint">Windows 暂不支持 MLX 本地模型，将自动引导使用 Qwen API 或豆包 API。</p>
-          </div>
-          <div class="provider-settings" data-asr-provider-settings="qwen">
-            <label>Qwen API Key<input id="qwen-api-key" type="password" placeholder="已保存则留空；输入新值会覆盖" autocomplete="new-password" /></label>
-            <label>API Base URL 或完整地址<input id="qwen-asr-endpoint" type="url" value="${esc(settings.qwenAsrEndpoint || "")}" placeholder="https://dashscope.aliyuncs.com/api/v1" /></label>
-            <label>模型<input id="qwen-asr-model" type="text" list="qwen-asr-model-options" value="${esc(settings.qwenAsrModel || "qwen-audio-3.0-asr-flash-filetrans")}" /></label>
-            <datalist id="qwen-asr-model-options">
-              <option value="qwen-audio-3.0-asr-flash-filetrans"></option>
-              <option value="fun-asr"></option>
-              <option value="fun-asr-flash-2026-06-15"></option>
-              <option value="qwen3-asr-flash-filetrans"></option>
-              <option value="qwen3-asr-flash"></option>
-            </datalist>
-            <p class="field-hint">程序会按模型自动选择异步文件转写、DashScope 同步或 OpenAI-compatible 路径。长播客推荐 <code>qwen-audio-3.0-asr-flash-filetrans</code>；Fun-ASR-Flash 单次最多 5 分钟。</p>
-          </div>
-          <div class="provider-settings" data-asr-provider-settings="doubao">
-            <label>豆包 API Key<input id="doubao-api-key" type="password" placeholder="已保存则留空；输入新值会覆盖" autocomplete="new-password" /></label>
-            <label>接口地址<input id="doubao-asr-endpoint" type="url" value="${esc(settings.doubaoAsrEndpoint || "")}" /></label>
-            <label>Resource ID<input id="doubao-asr-resource-id" type="text" value="${esc(settings.doubaoAsrResourceId || "volc.bigasr.auc_turbo")}" /></label>
-          </div>
-          <div id="asr-provider-status" class="native-host-status">正在检查 API 配置……</div>
-          <p class="field-hint">转写稿优先保留模型返回的完整标点；模型未返回标点时，会依据语音片段停顿补充基础逗号和句号。</p>
-          <p class="field-hint">API Key 由 Native Host 保存在 <span id="credential-storage-label">系统安全凭据存储</span>，扩展不会回显完整密钥。转写会将音频 URL 或音频内容发送至所选服务。</p>
-          </div>
-        </section>
-        <section class="settings-section settings-panel summary-settings-section" data-settings-panel="summary" ${panelHidden("summary")}>
-          <div class="settings-section-heading model-list-heading">
-            <h3>AI 总结模型</h3>
-            <button id="add-summary-model" class="secondary-button" type="button">添加模型</button>
-          </div>
-          <div id="summary-model-list" class="summary-model-list"></div>
-          <div id="summary-provider-status" class="native-host-status">正在检查模型凭据……</div>
-          <div class="summary-run-row">
-            <button id="choose-summary-transcript" class="secondary-button" type="button">选择已有转写稿并总结</button>
-            <span id="summary-action-status" class="field-hint">长转写稿会自动分段汇总。</span>
-          </div>
-          <div class="prompt-manager">
-            <div class="prompt-manager-heading">
-              <strong>总结 Prompt 版本</strong>
-              <span id="active-prompt-badge" class="prompt-badge"></span>
-            </div>
-            <label>选择版本<select id="summary-prompt-select"></select></label>
-            <div class="prompt-meta-grid">
-              <label>名称<input id="summary-prompt-name" type="text" maxlength="80" /></label>
-              <label>版本<input id="summary-prompt-version" type="text" maxlength="32" /></label>
-            </div>
-            <label>Prompt<textarea id="summary-prompt-content" rows="18" maxlength="20000"></textarea></label>
-            <div class="prompt-actions">
-              <button id="clone-summary-prompt" class="secondary-button" type="button">复制为新版本</button>
-              <button id="activate-summary-prompt" class="mini-button" type="button">设为当前</button>
-              <button id="delete-summary-prompt" class="mini-button is-danger" type="button">删除版本</button>
-            </div>
-            <p class="field-hint">内置版本只读；自定义版本保存在 Chrome 本地存储。支持占位符 <code>{{title}}</code>。</p>
-          </div>
-        </section>
-        <section class="settings-section settings-panel" data-settings-panel="account" ${panelHidden("account")}>
-          <div class="settings-section-heading"><h3>账号与会话</h3></div>
-          <div class="account-setting-row">
-            <div><strong>${esc(state.auth?.user?.nickname || state.auth?.user?.name || "小宇宙账号")}</strong><span>${state.auth ? "已登录 · 下次打开自动恢复" : "当前未登录"}</span></div>
-            ${state.auth ? '<button id="settings-logout-button" class="danger-button" type="button">退出登录</button>' : '<button id="settings-login-button" class="secondary-button" type="button">登录</button>'}
-          </div>
-        </section>
-        ${activeSettingsTab === "account" ? "" : '<button class="primary-button settings-save" type="submit">保存设置</button>'}
-      </form>
-    </section>`;
-  $$("[data-settings-tab]").forEach((button) => button.addEventListener("click", () => {
-    state.settingsTab = button.dataset.settingsTab;
-    $$("[data-settings-tab]").forEach((item) => {
-      const active = item === button;
-      item.classList.toggle("is-active", active);
-      item.setAttribute("aria-selected", String(active));
-    });
-    $$("[data-settings-panel]").forEach((panel) => {
-      panel.hidden = panel.dataset.settingsPanel !== state.settingsTab;
-    });
-  }));
-  $("#asr-provider").value = settings.asrProvider || "qwen";
-  $("#local-qwen-model").value = settings.localQwenModel || "Qwen/Qwen3-ASR-0.6B";
-  let nativeStatus = null;
-  const renderLocalQwenStatus = () => {
-    const localNode = $("#local-qwen-status");
-    if (!localNode || !nativeStatus) return;
-    const model = $("#local-qwen-model").value;
-    const cached = Boolean(nativeStatus.localQwen?.cachedModels?.[model]);
-    const supported = nativeStatus.localQwen?.supported !== false;
-    localNode.classList.toggle("is-ready", nativeStatus.localQwen?.available);
-    localNode.textContent = !supported
-      ? nativeStatus.localQwen?.reason || "当前系统不支持本地 Qwen3-ASR"
-      : nativeStatus.localQwen?.available
-      ? `本地运行时已安装 · 当前模型${cached ? "已缓存" : "将在首次使用时下载"}`
-      : "本地运行时未安装，请执行 ./install_local_asr.sh";
-  };
-  $("#local-qwen-model").addEventListener("change", renderLocalQwenStatus);
-  const updateAsrProviderSettings = () => {
-    $$("[data-asr-provider-settings]").forEach((node) => {
-      node.hidden = node.dataset.asrProviderSettings !== $("#asr-provider").value;
-    });
-  };
-  updateAsrProviderSettings();
-  $("#asr-provider").addEventListener("change", updateAsrProviderSettings);
-  renderSummaryModelList();
-  $("#add-summary-model").addEventListener("click", () => openSummaryModelEditor());
-  $("#settings-logout-button")?.addEventListener("click", openLogoutConfirmation);
-  $("#settings-login-button")?.addEventListener("click", openLogin);
-  initializeSummaryPromptManager(settings.activeSummaryPromptId);
-  const updatePreview = () => {
-    const audioValue = $("#audio-download-path").value.trim();
-    $("#download-save-as").disabled = Boolean(audioValue);
-  };
-  updatePreview();
-  $("#audio-download-path").addEventListener("input", updatePreview);
-  $("#transcript-download-path").addEventListener("input", updatePreview);
-  $("#summary-download-path").addEventListener("input", updatePreview);
-  $$("[data-choose-directory]").forEach((button) => button.addEventListener("click", async () => {
-    try {
-      const prompts = {
-        "audio-download-path": "请选择音频保存目录",
-        "transcript-download-path": "请选择文字稿保存目录",
-        "summary-download-path": "请选择 AI 总结稿保存目录"
-      };
-      const prompt = prompts[button.dataset.chooseDirectory] || "请选择保存目录";
-      const data = await send("choose-native-directory", { prompt });
-      $(`#${button.dataset.chooseDirectory}`).value = data.path;
-      updatePreview();
-    } catch (error) {
-      notify(error.message);
-    }
-  }));
-  $("#copy-native-install-command").addEventListener("click", async () => {
-    const command = $("#native-install-command").textContent;
-    try {
-      await navigator.clipboard.writeText(command);
-      notify("Native Host 安装命令已复制");
-    } catch {
-      notify(command);
-    }
-  });
-  $("#copy-local-asr-command").addEventListener("click", async () => {
-    const command = $("#local-qwen-install-command").textContent;
-    if (!command || command === "当前系统不支持") {
-      notify("Windows 暂不支持本地 Qwen3-ASR，请使用 API 模式");
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(command);
-      notify("本地 Qwen 安装命令已复制");
-    } catch {
-      notify(command);
-    }
-  });
-  $("#choose-summary-transcript").addEventListener("click", async (event) => {
-    const button = event.currentTarget;
-    try {
-      button.disabled = true;
-      button.textContent = "选择中…";
-      const selected = await send("import-summary-transcript");
-      await summarizeTranscriptPath(selected.path, button, $("#summary-action-status"));
-    } catch (error) {
-      $("#summary-action-status").textContent = error.message;
-      notify(error.message);
-    } finally {
-      button.disabled = false;
-      button.textContent = "选择已有转写稿并总结";
-    }
-  });
-  $("#settings-form").addEventListener("submit", saveSettings);
-  send("get-native-host-status").then((status) => {
-    nativeStatus = status;
-    const node = $("#native-host-status");
-    if (!node) return;
-    node.classList.toggle("is-ready", status.available);
-    node.textContent = status.available
-      ? `本地文件助手已连接 · ${status.version || "可用"}`
-      : `本地文件助手未连接，目录选择、ASR 和 AI 总结不可用。${status.error || ""}`;
-    $(".native-install-guide").hidden = status.available;
-    $("#native-host-diagnostics").hidden = status.available;
-    const isWindows = status.platform === "windows";
-    $("#native-platform").textContent = isWindows ? "Windows" : "macOS";
-    $("#native-install-title").textContent = isWindows
-      ? "Windows 安装步骤"
-      : "macOS 安装步骤";
-    $("#native-install-description").textContent = isWindows
-      ? "安装 Python 3 后执行下方命令；完成后彻底退出所有 Chrome 进程，再重新打开浏览器。"
-      : "在项目目录用终端执行下方命令；完成后重新加载扩展。";
-    $("#native-extension-id").textContent = status.extensionId || "未知";
-    $("#native-manifest-path").textContent = status.manifestPath || "未知";
-    $("#native-host-path").textContent = status.hostPath || "未知";
-    $("#native-install-command").textContent = status.installCommand || "未知";
-    $("#native-host-help").href = status.helpUrl;
-    $("#credential-storage-label").textContent = status.credentialStorage
-      || (isWindows ? "Windows DPAPI" : "macOS Keychain");
-    const localOption = $("#asr-provider option[value=local_qwen]");
-    const localSupported = status.localQwen?.supported !== false && !isWindows;
-    localOption.disabled = !localSupported;
-    $("#local-qwen-install-command").textContent = localSupported
-      ? status.localAsrInstallCommand || "./install_local_asr.sh"
-      : "当前系统不支持";
-    $("#copy-local-asr-command").disabled = !localSupported;
-    if (!localSupported && $("#asr-provider").value === "local_qwen") {
-      $("#asr-provider").value = "qwen";
-      updateAsrProviderSettings();
-      notify("Windows 暂不支持本地 Qwen3-ASR，已切换到 Qwen API");
-    }
-    $$("[data-choose-directory]").forEach((button) => {
-      button.disabled = !status.available;
-      button.title = status.available ? "" : "请先安装并连接 Native Host";
-    });
-    $("#choose-summary-transcript").disabled = !status.available;
-    const providerNode = $("#asr-provider-status");
-    if (!providerNode) return;
-    providerNode.classList.toggle("is-ready", status.qwenConfigured || status.doubaoConfigured || status.localQwen?.available);
-    providerNode.textContent = `本地 Qwen：${status.localQwen?.available ? "已安装" : "未安装"} · Qwen API：${status.qwenConfigured ? "已配置" : "未配置"} · 豆包 API：${status.doubaoConfigured ? "已配置" : "未配置"}`;
-    renderLocalQwenStatus();
-    refreshSummaryModelCredentialStatus();
-  });
-}
-
-function incrementPromptVersion(value) {
-  const parts = String(value || "1.0.0").split(".");
-  const last = Number(parts[parts.length - 1]);
-  if (Number.isInteger(last)) {
-    parts[parts.length - 1] = String(last + 1);
-    return parts.join(".");
-  }
-  return `${value || "1.0.0"}.1`;
-}
-
-function summaryPromptById(id) {
-  return state.summaryPromptDrafts.find((prompt) => prompt.id === id);
-}
-
-function syncSummaryPromptEditor() {
-  const prompt = summaryPromptById(state.summaryPromptEditorId);
-  if (!prompt || prompt.builtin || !$("#summary-prompt-content")) return;
-  prompt.name = $("#summary-prompt-name").value.trim() || "自定义总结 Prompt";
-  prompt.version = $("#summary-prompt-version").value.trim() || "1.0.0";
-  prompt.content = $("#summary-prompt-content").value.trim();
-}
-
-function refreshSummaryPromptSelect(selectedId) {
-  const select = $("#summary-prompt-select");
-  select.innerHTML = state.summaryPromptDrafts.map((prompt) =>
-    `<option value="${esc(prompt.id)}">${esc(prompt.name)} · v${esc(prompt.version)}${prompt.builtin ? "（内置）" : ""}</option>`
-  ).join("");
-  select.value = selectedId;
-}
-
-function loadSummaryPromptEditor(id) {
-  const prompt = summaryPromptById(id) || state.summaryPromptDrafts[0];
-  if (!prompt) return;
-  state.summaryPromptEditorId = prompt.id;
-  $("#summary-prompt-select").value = prompt.id;
-  $("#summary-prompt-name").value = prompt.name;
-  $("#summary-prompt-version").value = prompt.version;
-  $("#summary-prompt-content").value = prompt.content;
-  $("#summary-prompt-name").readOnly = Boolean(prompt.builtin);
-  $("#summary-prompt-version").readOnly = Boolean(prompt.builtin);
-  $("#summary-prompt-content").readOnly = Boolean(prompt.builtin);
-  $("#delete-summary-prompt").disabled = Boolean(prompt.builtin);
-  $("#activate-summary-prompt").disabled = prompt.id === state.settings.activeSummaryPromptId;
-  const active = summaryPromptById(state.settings.activeSummaryPromptId) || state.summaryPromptDrafts[0];
-  $("#active-prompt-badge").textContent = active
-    ? `当前：${active.name} v${active.version}`
-    : "未选择";
-}
-
-function initializeSummaryPromptManager(activeId) {
-  if (!state.summaryPromptDrafts.length) return;
-  state.settings.activeSummaryPromptId = activeId || state.summaryPromptDrafts[0].id;
-  refreshSummaryPromptSelect(state.settings.activeSummaryPromptId);
-  loadSummaryPromptEditor(state.settings.activeSummaryPromptId);
-  $("#summary-prompt-select").addEventListener("change", (event) => {
-    syncSummaryPromptEditor();
-    loadSummaryPromptEditor(event.target.value);
-  });
-  $("#clone-summary-prompt").addEventListener("click", () => {
-    syncSummaryPromptEditor();
-    const source = summaryPromptById(state.summaryPromptEditorId) || state.summaryPromptDrafts[0];
-    const copy = {
-      id: `custom-${crypto.randomUUID()}`,
-      name: `${source.name} 副本`,
-      version: incrementPromptVersion(source.version),
-      content: source.content,
-      builtin: false
-    };
-    state.summaryPromptDrafts.push(copy);
-    refreshSummaryPromptSelect(copy.id);
-    loadSummaryPromptEditor(copy.id);
-  });
-  $("#activate-summary-prompt").addEventListener("click", () => {
-    syncSummaryPromptEditor();
-    state.settings.activeSummaryPromptId = state.summaryPromptEditorId;
-    loadSummaryPromptEditor(state.summaryPromptEditorId);
-    notify("已设为当前 Prompt，保存设置后生效");
-  });
-  $("#delete-summary-prompt").addEventListener("click", () => {
-    const prompt = summaryPromptById(state.summaryPromptEditorId);
-    if (!prompt || prompt.builtin || !confirm(`确认删除 Prompt 版本“${prompt.name}”？`)) return;
-    state.summaryPromptDrafts = state.summaryPromptDrafts.filter((item) => item.id !== prompt.id);
-    if (state.settings.activeSummaryPromptId === prompt.id) {
-      state.settings.activeSummaryPromptId = state.summaryPromptDrafts[0].id;
-    }
-    refreshSummaryPromptSelect(state.settings.activeSummaryPromptId);
-    loadSummaryPromptEditor(state.settings.activeSummaryPromptId);
-  });
 }
 
 function podcastLinkOf(item) {
@@ -1622,6 +421,9 @@ function hidePlayerTimestampTooltip() {
   $("#player-timestamp-tooltip")?.classList.remove("is-visible");
 }
 
+let chapterButtons = [];
+let activeChapter = null;
+
 function renderPlayerAnchors(item = null) {
   const holder = $("#progress-anchors");
   if (!holder) return;
@@ -1643,7 +445,9 @@ function renderPlayerAnchors(item = null) {
       ></button>`;
     }).join("")
     : "";
-  $$("[data-progress-seconds]", holder).forEach((button) => {
+  activeChapter = null;
+  chapterButtons = $$("[data-progress-seconds]", holder);
+  chapterButtons.forEach((button) => {
     button.addEventListener("click", () => seekToTimestamp(button.dataset.progressSeconds, { scroll: true }));
     button.addEventListener("mouseenter", () => showPlayerTimestampTooltip(button));
     button.addEventListener("focus", () => showPlayerTimestampTooltip(button));
@@ -1654,13 +458,11 @@ function renderPlayerAnchors(item = null) {
 }
 
 function updateActiveProgressAnchor(seconds) {
-  const anchors = $$("[data-progress-seconds]");
-  let active = null;
-  anchors.forEach((anchor) => {
-    anchor.classList.remove("is-active");
-    if (Number(anchor.dataset.progressSeconds) <= seconds + 0.25) active = anchor;
-  });
-  active?.classList.add("is-active");
+  const next = chapterButtons.findLast(button => Number(button.dataset.progressSeconds) <= seconds + .25);
+  if (next === activeChapter) return;
+  activeChapter?.classList.remove("is-active");
+  next?.classList.add("is-active");
+  activeChapter = next;
 }
 
 async function copyLink(url, label) {
@@ -1700,6 +502,7 @@ function updatePlayerLinkButtons(item = null) {
 
 async function resolveEpisode(item) {
   if (!item) return;
+  const owner = listeningOwner();
   let eid = episodeIdOf(item);
   let episode = item;
   if (!eid && podcastIdOf(item)) {
@@ -1715,7 +518,7 @@ async function resolveEpisode(item) {
     try {
       const detail = unwrapDetail(await api("/episode_detail", { eid }, "GET"));
       episode = episodeWithPodcast({ ...episode, ...detail }, episode.podcast);
-      state.episodeDetails.set(eid, episode);
+      if (owner === listeningOwner()) state.episodeDetails.set(eid, episode);
     } catch (error) {
       if (!audioOf(episode)) throw error;
       episode = { ...episode, detailLoadError: error.message };
@@ -1972,7 +775,7 @@ async function summarizeEpisode(item, button = null) {
   );
 }
 
-async function openEpisode(item, { autoplay = true, navigate = true, record = null } = {}) {
+async function openEpisode(item, { autoplay = true, navigate = false, record = null } = {}) {
   const version = ++selectionVersion;
   const owner = listeningOwner();
   const active = () => version === selectionVersion && owner === listeningOwner();
@@ -1998,7 +801,7 @@ async function openEpisode(item, { autoplay = true, navigate = true, record = nu
       activatePlayer(episode, record);
       renderPlayerAnchors(episode);
     }
-    if (navigate) { setRoute("listen"); window.scrollTo(0, 0); }
+    if (navigate) setRoute("listen");
     if (autoplay) {
       if (player.ended) player.currentTime = 0;
       await player.play();
@@ -2019,6 +822,7 @@ async function toggleSubscription(item, button = null) {
   try {
     await api("/subscription_update", { pid, mode: "ON" });
     state.subscribedPids.add(pid);
+    subscriptionCache = null;
     if (button) button.textContent = "已订阅";
     notify("已加入订阅");
   } catch (error) {
@@ -2110,65 +914,6 @@ async function syncOfficialLogin() {
   }
 }
 
-async function saveSettings(event) {
-  event.preventDefault();
-  try {
-    syncSummaryPromptEditor();
-    if (state.summaryPromptDrafts.some((prompt) => !String(prompt.content || "").trim())) {
-      throw new Error("AI 总结 Prompt 内容不能为空");
-    }
-    const asrCredentialStatus = await send("save-asr-credentials", {
-      credentials: {
-        qwenApiKey: $("#qwen-api-key").value.trim(),
-        doubaoApiKey: $("#doubao-api-key").value.trim()
-      }
-    });
-    const keepConsent = Boolean(state.settings.summaryConsentAccepted);
-    state.settings = await send("update-settings", {
-      settings: {
-        downloadFolder: "小宇宙音频",
-        transcriptFolder: "小宇宙转写稿",
-        audioDownloadPath: $("#audio-download-path").value.trim(),
-        transcriptDownloadPath: $("#transcript-download-path").value.trim(),
-        summaryDownloadPath: $("#summary-download-path").value.trim(),
-        downloadSaveAs: $("#download-save-as").checked,
-        transcriptSource: "asr",
-        asrProvider: $("#asr-provider").value,
-        localQwenModel: $("#local-qwen-model").value,
-        qwenAsrEndpoint: $("#qwen-asr-endpoint").value.trim(),
-        qwenAsrModel: $("#qwen-asr-model").value.trim(),
-        doubaoAsrEndpoint: $("#doubao-asr-endpoint").value.trim(),
-        doubaoAsrResourceId: $("#doubao-asr-resource-id").value.trim(),
-        summaryModels: state.summaryModelDrafts.map((model) => ({ ...model })),
-        summaryPromptVersions: state.summaryPromptDrafts.map((prompt) => ({ ...prompt })),
-        activeSummaryPromptId: state.settings.activeSummaryPromptId,
-        summaryConsentAccepted: keepConsent,
-        summaryIncludeComments: false
-      }
-    });
-    $("#qwen-api-key").value = "";
-    $("#doubao-api-key").value = "";
-    const providerNode = $("#asr-provider-status");
-    if (providerNode) {
-      providerNode.classList.toggle("is-ready", asrCredentialStatus.qwenConfigured || asrCredentialStatus.doubaoConfigured || asrCredentialStatus.localQwen?.available);
-      providerNode.textContent = `本地 Qwen：${asrCredentialStatus.localQwen?.available ? "已安装" : "未安装"} · Qwen API：${asrCredentialStatus.qwenConfigured ? "已配置" : "未配置"} · 豆包 API：${asrCredentialStatus.doubaoConfigured ? "已配置" : "未配置"}`;
-    }
-    refreshSummaryModelCredentialStatus();
-    $("#audio-download-path").value = state.settings.audioDownloadPath;
-    $("#transcript-download-path").value = state.settings.transcriptDownloadPath;
-    $("#summary-download-path").value = state.settings.summaryDownloadPath;
-    $("#audio-path-preview").textContent = state.settings.audioDownloadPath || "浏览器默认下载目录/小宇宙音频";
-    $("#transcript-path-preview").textContent = state.settings.transcriptDownloadPath || "浏览器默认下载目录/小宇宙转写稿";
-    $("#summary-path-preview").textContent = state.settings.summaryDownloadPath
-      || state.settings.transcriptDownloadPath
-      || "浏览器默认下载目录/小宇宙转写稿";
-    updatePlayerLinkButtons(state.current);
-    notify("设置已保存");
-  } catch (error) {
-    notify(error.message);
-  }
-}
-
 function initPlayer() {
   const audio = $("#audio");
   const closePlayerMenu = () => $("#player-more-menu").removeAttribute("open");
@@ -2178,13 +923,22 @@ function initPlayer() {
   });
   $("#skip-back").addEventListener("click", () => skipBy(-15));
   $("#skip-forward").addEventListener("click", () => skipBy(30));
-  $("#speed-button").addEventListener("click", (event) => {
-    const next = audio.playbackRate >= 2 ? 1 : audio.playbackRate + .5;
-    audio.playbackRate = next;
-    event.currentTarget.textContent = `播放速度 · ${next}×`;
-    closePlayerMenu();
+  $("#speed-button").addEventListener("change", event => {
+    if (sourceReady) startedListening = true;
+    audio.playbackRate = Number(event.currentTarget.value);
   });
-  $("#view-podcast-button").addEventListener("click", () => state.current ? openPodcast(state.current) : notify("当前没有正在播放的节目"));
+  const volume = $("#volume-slider");
+  const applyVolume = () => {
+    audio.volume = Number(volume.value) / 100;
+    $("#volume-value").value = volume.value + "%";
+    $("#speaker-symbol").setAttribute("href", "symbols.svg#" + (audio.volume ? "volume" : "mute"));
+  };
+  const savedVolume = localStorage.getItem("player-volume");
+  if (savedVolume !== null && Number.isFinite(Number(savedVolume))) volume.value = savedVolume;
+  applyVolume();
+  volume.addEventListener("input", applyVolume);
+  volume.addEventListener("change", () => localStorage.setItem("player-volume", volume.value));
+  $("#view-podcast-button").addEventListener("click", () => { closePlayerMenu(); if (state.current) openPodcast(state.current); });
   $("#download-audio-button").addEventListener("click", () => {
     closePlayerMenu();
     return state.current ? downloadEpisodeAudio(state.current) : notify("当前没有正在播放的单集");
@@ -2232,9 +986,9 @@ async function init() {
   $("#back-button").hidden = true;
   markConnection(); initPlayer(); initializeListening(); initializeSummaryModelDialog(); renderRoute();
   $$(".nav-item").forEach((item) => item.addEventListener("click", () => setRoute(item.dataset.route)));
+  initializeLibrary();
   $("#back-button").addEventListener("click", () => {
-    if (state.episodeView) closeEpisode();
-    else closePodcast();
+    goBack();
   });
   $("#account-button").addEventListener("click", () => {
     if (!state.auth) return openLogin();
@@ -2244,7 +998,7 @@ async function init() {
   $("#logout-confirm").addEventListener("click", confirmLogout);
   $("#open-official-login-button").addEventListener("click", openOfficialLogin);
   $("#sync-official-login-button").addEventListener("click", syncOfficialLogin);
-  chrome.storage.onChanged.addListener((changes, areaName) => {
+  window.xyzDesktop.onStorage(({ changes, areaName }) => {
     if (areaName !== "session" || !changes[AUTH_SESSION_KEY]) return;
     const next = changes[AUTH_SESSION_KEY].newValue || null;
     const previousOwner = listeningOwner();
@@ -2252,7 +1006,7 @@ async function init() {
     markConnection();
     if (previousOwner !== listeningOwner()) {
       clearListeningSession();
-      state.subscriptions = []; state.subscribedPids.clear(); state.feed = [];
+      resetLibrary();
       state.podcastView = null; state.episodeView = null;
       state.searchRequest++; state.searchResultsByType = { episode: null, podcast: null };
       state.searchErrorsByType = {};
@@ -2263,6 +1017,13 @@ async function init() {
   });
   loadListeningHistory().catch(error => notify(error.message));
   $$("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
+  document.addEventListener("toggle", event => {
+    const menu = event.target;
+    if (!menu.matches?.(".action-menu") || !menu.open) return;
+    const bounds = menu.querySelector("summary").getBoundingClientRect();
+    const available = innerHeight - bounds.bottom;
+    menu.classList.toggle("opens-up", available < menu.querySelector(".action-menu-panel").offsetHeight + 8 && bounds.top > available);
+  }, true);
   document.addEventListener("click", (event) => {
     const activeMenu = event.target.closest(".action-menu");
     $$(".action-menu[open]").forEach((menu) => {

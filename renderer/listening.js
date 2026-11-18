@@ -24,14 +24,30 @@ function paintCover(node, url, label) {
   img.src = url;
   node.append(img);
 }
-function mountListeningLayout(home) {
+function mountListeningLayout(home, history) {
   document.body.classList.toggle('listening-layout', home);
   $('#listening-page').hidden = !home;
-  $('#page-content').hidden = home;
+  $('#history-page').hidden = !history;
+  $('#page-content').hidden = home || history;
+  if (home || history) $('#page-content').replaceChildren();
   const parent = $(home ? '#home-player-slot' : '#mini-player-slot');
-  const footer = $('.player-bar');
-  if (footer.parentNode !== parent) parent.append(footer);
-  if (home) { renderListeningHistory(); requestAnimationFrame(drawWaveform); }
+  const player = $('.player-bar');
+  if (player.parentNode !== parent) {
+    for (const menu of $$('details[open]', player)) menu.open = false;
+    parent.append(player);
+  }
+  if (home || history) {
+    const slot = $(history ? '#history-page' : '#home-history-slot');
+    const panel = $('#history-panel');
+    if (panel.parentNode !== slot) slot.append(panel);
+    panel.setAttribute('aria-labelledby', history ? 'route-title' : 'history-heading');
+    $('.history-filters').hidden = !history;
+    $('.history-heading').hidden = history;
+    renderListeningHistory();
+  }
+  $('#player-cover').title = home ? '查看单集详情' : '打开收听页';
+  $('#player-cover').setAttribute('aria-label', $('#player-cover').title);
+  if (home) requestAnimationFrame(drawWaveform);
 }
 function syncPlaybackButtons() {
   const audio = $('#audio');
@@ -44,8 +60,13 @@ function syncPlaybackButtons() {
   $('#skip-back').disabled = !state.current;
   $('#skip-forward').disabled = !state.current;
   $('#episode-notes-button').disabled = !state.current;
-  $('#home-view-podcast').disabled = $('#view-podcast-button').disabled;
-  $('#home-summarize').disabled = $('#summarize-button').disabled;
+  document.body.classList.toggle('player-empty', !state.current);
+  play.disabled = !state.current;
+  $('#player-title').disabled = !state.current;
+  $('#player-cover').disabled = !state.current;
+  $('#player-state').textContent = !state.current ? '尚未播放' : audio.ended ? '已听完' : paused ? '继续收听' : '正在播放';
+  $('.player-bar').classList.toggle('is-playing', !paused);
+  syncLibraryPlayButtons();
 }
 function historyTime(record) {
   if (record.completed) return '已听完';
@@ -57,16 +78,20 @@ function renderListeningHistory() {
   for (const button of $$('[data-history-filter]')) {
     button.setAttribute('aria-pressed', String(button.dataset.historyFilter === historyFilter));
   }
-  const filtered = state.listeningHistory.filter(record => historyFilter !== 'unfinished' || !record.completed);
-  const focusedId = holder.contains(document.activeElement) ? document.activeElement.closest('[data-history-eid]')?.dataset.historyEid : '';
+  const home = document.body.classList.contains('listening-layout');
+  const all = state.listeningHistory;
+  const filtered = home ? all.slice(0, 3) : all.filter(record => historyFilter === 'all' || record.completed === (historyFilter === 'completed'));
+  if (!home && !$('#history-page').hidden) $('#route-meta').textContent = all.length + ' 集';
+  const focused = holder.contains(document.activeElement) ? document.activeElement : null;
+  const focusedId = focused?.closest('[data-history-eid]')?.dataset.historyEid;
+  const focusedAction = focused?.dataset.historyAction;
   holder.replaceChildren();
   if (!filtered.length) {
-    const details = !state.auth ? ['登录后继续收听', '登录小宇宙后，可以在这里找到听过的单集。', '登录', 'login']
-      : historyFilter === 'unfinished' && state.listeningHistory.length
-        ? ['没有未听完的单集', '已听完的单集收在「全部」里。', '查看全部', 'all']
-        : ['还没有播放记录', '从发现或我的订阅播放一集，进度就会保存在这里。', '去发现', 'discover'];
-    holder.innerHTML = '<div class="history-empty"><strong>' + details[0] + '</strong><p>' + details[1] +
-      '</p><button type="button" data-empty-action="' + details[3] + '">' + details[2] + '</button></div>';
+    const text = !state.auth ? '登录后可以在这里找到听过的单集' : !all.length ? '听过的单集和进度会显示在这里'
+      : historyFilter === 'completed' ? '还没有已听完的单集' : '所有单集都已听完';
+    holder.innerHTML = '<div class="history-empty">' + icon('history') + '<span>' + text + '</span>' +
+      (!state.auth ? '<button class="text-action" data-empty-action="login">登录</button>' :
+        !home && all.length ? '<button class="text-action" data-empty-action="all">查看全部</button>' : '') + '</div>';
     return;
   }
   const fragment = document.createDocumentFragment();
@@ -74,27 +99,32 @@ function renderListeningHistory() {
   list.className = 'history-rows';
   for (const record of filtered) {
     const episode = record.episode;
-    const li = document.createElement('li');
-    const button = document.createElement('button');
-    button.className = 'history-row';
-    button.type = 'button';
-    button.dataset.historyEid = episode.eid;
-    button.setAttribute('aria-label', (record.completed ? '重听 ' : '继续播放 ') + titleOf(episode) + '，' + historyTime(record));
-    button.innerHTML = '<span class="history-cover"></span><span class="history-copy"><strong></strong><small></small>' +
-      '<span class="history-meter" aria-hidden="true"><i></i></span></span><span class="history-time"><span></span></span>';
-    paintCover($('.history-cover', button), imageOf(episode), '');
-    $('.history-copy strong', button).textContent = titleOf(episode);
-    $('.history-copy small', button).textContent = episode.podcast?.title || '';
+    const row = document.createElement('li');
+    row.className = 'history-row';
+    row.dataset.historyEid = episode.eid;
+    row.innerHTML = '<button class="history-cover" type="button" data-history-action="cover"></button>' +
+      '<div class="history-copy"><button class="history-title" type="button" data-history-action="detail"></button><small></small>' +
+      '<span class="history-meter" aria-hidden="true"><i></i></span></div>' +
+      '<span class="history-time"><span></span></span><button class="tile-play" type="button" data-history-action="play">' + icon('play') + '</button>';
+    const cover = $('.history-cover', row);
+    cover.setAttribute('aria-label', '查看单集详情 ' + titleOf(episode));
+    paintCover(cover, imageOf(episode), '');
+    const title = $('.history-title', row);
+    title.textContent = titleOf(episode);
+    title.title = titleOf(episode);
+    $('.history-copy small', row).textContent = episode.podcast?.title || '';
     const progress = record.completed ? 100 : (record.duration ? record.currentTime / record.duration * 100 : 0);
-    $('.history-meter i', button).style.width = Math.min(100,Math.max(0,progress)) + '%';
-    $('.history-time span', button).textContent = historyTime(record);
-    if (episode.eid === episodeIdOf(state.current)) $('.history-time', button).insertAdjacentHTML('afterbegin', icon('levels'));
-    li.append(button);
-    fragment.append(li);
+    $('.history-meter i', row).style.width = Math.min(100, Math.max(0, progress)) + '%';
+    $('.history-time span', row).textContent = historyTime(record);
+    const play = $('.tile-play', row);
+    play.dataset.playEid = episode.eid;
+    play.dataset.episodeTitle = titleOf(episode);
+    fragment.append(row);
   }
   list.append(fragment);
   holder.append(list);
-  if (focusedId) holder.querySelector('[data-history-eid="' + CSS.escape(focusedId) + '"]')?.focus({ preventScroll: true });
+  syncLibraryPlayButtons();
+  if (focusedId && focusedAction) holder.querySelector(`[data-history-eid="${CSS.escape(focusedId)}"] [data-history-action="${focusedAction}"]`)?.focus({ preventScroll: true });
 }
 
 async function loadListeningHistory(restore = true) {
@@ -104,7 +134,7 @@ async function loadListeningHistory(restore = true) {
   const entries = owner ? await xyzDesktop.history() : [];
   if (version !== historyLoad || owner !== listeningOwner()) return;
   state.listeningHistory = entries;
-  renderListeningHistory();
+  renderListeningHistory(); refreshHomePicks();
   if (!restore || state.current || selectionVersion !== selection) return;
   const record = entries.find(entry => !entry.completed) || entries[0];
   if (record) await openEpisode(record.episode, { autoplay: false, navigate: false, record });
@@ -116,8 +146,8 @@ function updateLocalPosition(record) {
   const structureChanged = index !== 0 || existing?.completed !== record.completed;
   if (index >= 0) entries.splice(index, 1);
   entries.unshift(record);
-  if (!document.body.classList.contains('listening-layout')) return;
-  if (structureChanged) { renderListeningHistory(); return; }
+  if ($('#listening-page').hidden && $('#history-page').hidden) return;
+  if (structureChanged) { renderListeningHistory(); refreshHomePicks(); return; }
   const row = $('#history-list [data-history-eid="' + CSS.escape(record.episode.eid) + '"]');
   if (!row) return;
   $('.history-time span', row).textContent = historyTime(record);
@@ -167,7 +197,10 @@ function activatePlayer(episode, record) {
   $('#player-title').textContent = titleOf(episode);
   $('#player-subtitle').textContent = episode.podcast?.title || episode.podcast?.name || '小宇宙单集';
   paintCover($('#player-cover'), imageOf(episode), '节目封面');
-  $('#speed-button').textContent = '播放速度 · ' + audio.playbackRate + '×';
+  const speed = $('#speed-button');
+  const rate = String(audio.playbackRate);
+  if (![...speed.options].some(option => option.value === rate)) speed.add(new Option(rate + '×', rate));
+  speed.value = rate;
   syncPlaybackButtons();
 }
 function applyResumePosition() {
@@ -189,13 +222,14 @@ function clearListeningSession() {
   bufferedResume = null;
   state.current = null;
   state.listeningHistory = [];
+  historyFilter = 'all';
   state.episodeDetails.clear();
   state.currentTranscriptPath = ''; state.currentTranscriptEpisodeId = '';
   state.currentTranscriptSegments = []; state.currentSummaryPath = '';
   const audio = $('#audio');
   audio.pause(); audio.removeAttribute('src'); audio.load();
-  paintCover($('#player-cover'), '', '');
-  $('#player-title').textContent = '还没有开始播放';
+  $('#player-cover').innerHTML = '<img src="icons/planet.svg" alt="" />';
+  $('#player-title').textContent = '选一集开始收听';
   $('#player-subtitle').textContent = '从发现或我的订阅选择一集';
   updatePlayerLinkButtons(null); setTranscriptionStatus(); renderPlayerAnchors(null); syncPlaybackButtons();
 }
@@ -220,11 +254,19 @@ function drawWaveform() {
     const amplitude = Number.isFinite(supplied) ? Math.min(1,Math.abs(supplied)) :
       envelope * (.22 + .78*Math.abs(Math.sin(i*8.07+.6)*Math.cos(i*.61)));
     const half = enabled ? Math.max(1,amplitude*(height-5)/2) : 1.4 + .22*height*amplitude;
-    ctx.strokeStyle = enabled && t <= progress ? '#1a1b1d' : '#d6d7db';
+    ctx.strokeStyle = enabled && t <= progress ? '#fbfcfd' : '#7e858c';
     ctx.beginPath(); ctx.moveTo(x,height/2-half); ctx.lineTo(x,height/2+half); ctx.stroke();
   }
 }
 function initializeListening() {
+  $('#all-history').onclick = () => { historyFilter = 'all'; setRoute('history'); };
+  $('#empty-discover').onclick = () => setRoute('discover');
+  $('#empty-subscriptions').onclick = () => setRoute('subscriptions');
+  $('#player-title').onclick = () => { if (state.current) openEpisodeDetail(state.current); };
+  $('#player-cover').onclick = () => {
+    if (document.body.classList.contains('listening-layout')) openEpisodeDetail(state.current);
+    else setRoute('listen');
+  };
   $('#brand-home').addEventListener('click', () => setRoute('listen'));
   $('.history-filters').addEventListener('click', event => {
     const button = event.target.closest('[data-history-filter]');
@@ -237,18 +279,15 @@ function initializeListening() {
     if (action === 'all') { historyFilter = 'all'; return renderListeningHistory(); }
     const id = event.target.closest('[data-history-eid]')?.dataset.historyEid;
     const record = state.listeningHistory.find(r => r.episode.eid === id);
-    if (record) openEpisode(record.episode, { record });
+    if (!record) return;
+    const rowAction = event.target.closest('[data-history-action]')?.dataset.historyAction;
+    if (rowAction === 'play') toggleEpisode(record.episode);
+    if (rowAction === 'detail' || rowAction === 'cover') openEpisodeDetail(record.episode);
   });
   $('#episode-notes-button').addEventListener('click', () => {
     $('#player-more-menu').open = false;
-    if (!state.current) return;
-    state.episodeView = { episode: state.current, scrollY: window.scrollY };
-    $('#route-title').textContent = titleOf(state.current);
-    $('#back-button').hidden = false; renderRoute(); window.scrollTo(0,0);
+    if (state.current) openEpisodeDetail(state.current);
   });
-  for (const [id, target] of [['#home-view-podcast','#view-podcast-button'],['#home-summarize','#summarize-button']]) {
-    $(id).addEventListener('click', () => { $('#player-more-menu').open = false; $(target).click(); });
-  }
   $('#all-settings-button').addEventListener('click', () => { $('#desktop-options-dialog').close(); setRoute('settings'); });
   const audio = $('#audio');
   audio.addEventListener('loadedmetadata', applyResumePosition);
